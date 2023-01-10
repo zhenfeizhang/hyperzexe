@@ -14,11 +14,16 @@ ark-poly = { version = "^0.3.0", default-features = false }
 ark-serialize =  { version = "^0.3.0", default-features = false }
 ark-bls12-381 = { version = "0.3.0", default-features = false, features = [ "curve" ] }
 
+merlin = "3.0.0"
+digest = "0.10.6"
 rand_chacha = { version = "0.3.0", default-features = false }
 displaydoc = { version = "0.2.3", default-features = false }
 rayon = { version = "1.5.2", default-features = false, optional = true }
 derivative = { version = "2", features = ["use_core"] }
 itertools = { version = "0.10.4", optional = true }
+blake2 = "0.10.6"
+rand = "0.7.3"
+thiserror = "1.0"
 
 transcript = { path = "../transcript" }
 arithmetic = { path = "../arithmetic" }

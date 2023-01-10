@@ -1,12 +1,10 @@
-use ark_bls12_381::{Bls12_381, Fr};
+use ark_bls12_381::{Fr, G1Affine as G1};
 use ark_ff::UniformRand;
 use ark_poly::{DenseMultilinearExtension, MultilinearExtension};
 use ark_std::{sync::Arc, test_rng};
 use std::time::Instant;
-use subroutines::pcs::{
-    prelude::{MultilinearKzgPCS, PCSError, PolynomialCommitmentScheme},
-    StructuredReferenceString,
-};
+use subroutines::pcs::prelude::{MultilinearHyraxPCS, PCSError, PolynomialCommitmentScheme};
+use transcript::IOPTranscript;
 
 fn main() -> Result<(), PCSError> {
     bench_pcs()
@@ -16,7 +14,7 @@ fn bench_pcs() -> Result<(), PCSError> {
     let mut rng = test_rng();
 
     // normal polynomials
-    let uni_params = MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, 24)?;
+    let uni_params = MultilinearHyraxPCS::<G1>::gen_srs_for_testing(&mut rng, 24)?;
 
     for nv in 4..25 {
         let repetition = if nv < 10 {
@@ -28,7 +26,7 @@ fn bench_pcs() -> Result<(), PCSError> {
         };
 
         let poly = Arc::new(DenseMultilinearExtension::rand(nv, &mut rng));
-        let (ck, vk) = uni_params.trim(nv)?;
+        let (ck, vk) = (uni_params.clone(), uni_params.clone());
 
         let point: Vec<_> = (0..nv).map(|_| Fr::rand(&mut rng)).collect();
 
@@ -36,43 +34,51 @@ fn bench_pcs() -> Result<(), PCSError> {
         let com = {
             let start = Instant::now();
             for _ in 0..repetition {
-                let _commit = MultilinearKzgPCS::commit(&ck, &poly)?;
+                let _commit = MultilinearHyraxPCS::commit(&ck, &poly)?;
             }
 
             println!(
-                "KZG commit for {} variables: {} ns",
+                "Hyrax commit for {} variables: {} ns",
                 nv,
                 start.elapsed().as_nanos() / repetition as u128
             );
 
-            MultilinearKzgPCS::commit(&ck, &poly)?
+            MultilinearHyraxPCS::commit(&ck, &poly)?
         };
 
         // open
         let (proof, value) = {
+            let mut transcript = IOPTranscript::<Fr>::new(b"test");
             let start = Instant::now();
             for _ in 0..repetition {
-                let _open = MultilinearKzgPCS::open(&ck, &poly, &point)?;
+                let _open = MultilinearHyraxPCS::open(&ck, &poly, &point, &mut transcript)?;
             }
 
             println!(
-                "KZG open for {} variables: {} ns",
+                "Hyrax open for {} variables: {} ns",
                 nv,
                 start.elapsed().as_nanos() / repetition as u128
             );
-            MultilinearKzgPCS::open(&ck, &poly, &point)?
+            let mut transcript = IOPTranscript::<Fr>::new(b"test");
+            MultilinearHyraxPCS::open(&ck, &poly, &point, &mut transcript)?
         };
 
         // verify
         {
+            let mut transcript = IOPTranscript::<Fr>::new(b"test");
             let start = Instant::now();
             for _ in 0..repetition {
-                assert!(MultilinearKzgPCS::verify(
-                    &vk, &com, &point, &value, &proof
+                assert!(MultilinearHyraxPCS::verify(
+                    &vk,
+                    &com,
+                    &point,
+                    &value,
+                    &proof,
+                    &mut transcript,
                 )?);
             }
             println!(
-                "KZG verify for {} variables: {} ns",
+                "Hyrax verify for {} variables: {} ns",
                 nv,
                 start.elapsed().as_nanos() / repetition as u128
             );

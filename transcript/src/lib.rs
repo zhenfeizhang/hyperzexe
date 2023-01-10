@@ -50,6 +50,14 @@ impl<F: PrimeField> IOPTranscript<F> {
         Ok(())
     }
 
+    // Append the protocol name to the transcript
+    pub fn append_protocol_name(
+        &mut self,
+        protocol_name: &'static [u8],
+    ) -> Result<(), TranscriptError> {
+        self.append_message(b"protocol_name", protocol_name)
+    }
+
     // Append the message to the transcript.
     pub fn append_field_element(
         &mut self,
@@ -57,6 +65,18 @@ impl<F: PrimeField> IOPTranscript<F> {
         field_elem: &F,
     ) -> Result<(), TranscriptError> {
         self.append_message(label, &to_bytes!(field_elem)?)
+    }
+
+    pub fn append_field_vectors(
+        &mut self,
+        label: &'static [u8],
+        field_elems: &[F],
+    ) -> Result<(), TranscriptError> {
+        self.append_message(label, b"begin_append_vector")?;
+        for item in field_elems {
+            self.append_field_element(label, item)?;
+        }
+        self.append_message(label, b"end_append_vector")
     }
 
     // Append the message to the transcript.

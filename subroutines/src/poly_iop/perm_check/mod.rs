@@ -5,7 +5,7 @@ use crate::{
     pcs::PolynomialCommitmentScheme,
     poly_iop::{errors::PolyIOPErrors, prelude::ProductCheck, PolyIOP},
 };
-use ark_ec::PairingEngine;
+use ark_ec::AffineCurve;
 use ark_poly::DenseMultilinearExtension;
 use ark_std::{end_timer, start_timer};
 use std::sync::Arc;
@@ -15,16 +15,16 @@ use transcript::IOPTranscript;
 /// - the SubClaim from the ProductCheck
 /// - Challenges beta and gamma
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct PermutationCheckSubClaim<E, PCS, PC>
+pub struct PermutationCheckSubClaim<C, PCS, PC>
 where
-    E: PairingEngine,
-    PC: ProductCheck<E, PCS>,
-    PCS: PolynomialCommitmentScheme<E>,
+    C: AffineCurve,
+    PC: ProductCheck<C, PCS>,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
 {
     /// the SubClaim from the ProductCheck
     pub product_check_sub_claim: PC::ProductCheckSubClaim,
     /// Challenges beta and gamma
-    pub challenges: (E::Fr, E::Fr),
+    pub challenges: (C::ScalarField, C::ScalarField),
 }
 
 pub mod util;
@@ -40,10 +40,10 @@ pub mod util;
 /// - fs = (f1, ..., fk)
 /// - gs = (g1, ..., gk)
 /// - permutation oracles = (p1, ..., pk)
-pub trait PermutationCheck<E, PCS>: ProductCheck<E, PCS>
+pub trait PermutationCheck<C, PCS>: ProductCheck<C, PCS>
 where
-    E: PairingEngine,
-    PCS: PolynomialCommitmentScheme<E>,
+    C: AffineCurve,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
 {
     type PermutationCheckSubClaim;
     type PermutationProof;
@@ -73,7 +73,7 @@ where
         fxs: &[Self::MultilinearExtension],
         gxs: &[Self::MultilinearExtension],
         perms: &[Self::MultilinearExtension],
-        transcript: &mut IOPTranscript<E::Fr>,
+        transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<
         (
             Self::PermutationProof,
@@ -92,16 +92,16 @@ where
     ) -> Result<Self::PermutationCheckSubClaim, PolyIOPErrors>;
 }
 
-impl<E, PCS> PermutationCheck<E, PCS> for PolyIOP<E::Fr>
+impl<C, PCS> PermutationCheck<C, PCS> for PolyIOP<C::ScalarField>
 where
-    E: PairingEngine,
-    PCS: PolynomialCommitmentScheme<E, Polynomial = Arc<DenseMultilinearExtension<E::Fr>>>,
+    C: AffineCurve,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
 {
-    type PermutationCheckSubClaim = PermutationCheckSubClaim<E, PCS, Self>;
+    type PermutationCheckSubClaim = PermutationCheckSubClaim<C, PCS, Self>;
     type PermutationProof = Self::ProductCheckProof;
 
     fn init_transcript() -> Self::Transcript {
-        IOPTranscript::<E::Fr>::new(b"Initializing PermutationCheck transcript")
+        IOPTranscript::<C::ScalarField>::new(b"Initializing PermutationCheck transcript")
     }
 
     fn prove(
@@ -109,7 +109,7 @@ where
         fxs: &[Self::MultilinearExtension],
         gxs: &[Self::MultilinearExtension],
         perms: &[Self::MultilinearExtension],
-        transcript: &mut IOPTranscript<E::Fr>,
+        transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<
         (
             Self::PermutationProof,
@@ -147,7 +147,7 @@ where
         let (numerators, denominators) = computer_nums_and_denoms(&beta, &gamma, fxs, gxs, perms)?;
 
         // invoke product check on numerator and denominator
-        let (proof, prod_poly, frac_poly) = <Self as ProductCheck<E, PCS>>::prove(
+        let (proof, prod_poly, frac_poly) = <Self as ProductCheck<C, PCS>>::prove(
             pcs_param,
             &numerators,
             &denominators,
@@ -170,7 +170,7 @@ where
 
         // invoke the zero check on the iop_proof
         let product_check_sub_claim =
-            <Self as ProductCheck<E, PCS>>::verify(proof, aux_info, transcript)?;
+            <Self as ProductCheck<C, PCS>>::verify(proof, aux_info, transcript)?;
 
         end_timer!(start);
         Ok(PermutationCheckSubClaim {
@@ -184,27 +184,30 @@ where
 mod test {
     use super::PermutationCheck;
     use crate::{
-        pcs::{prelude::MultilinearKzgPCS, PolynomialCommitmentScheme},
+        pcs::{prelude::MultilinearHyraxPCS, PolynomialCommitmentScheme},
         poly_iop::{errors::PolyIOPErrors, PolyIOP},
     };
     use arithmetic::{evaluate_opt, identity_permutation_mles, random_permutation_mles, VPAuxInfo};
-    use ark_bls12_381::Bls12_381;
-    use ark_ec::PairingEngine;
+    use ark_bls12_381::G1Affine as G1;
+    use ark_ec::AffineCurve;
     use ark_poly::{DenseMultilinearExtension, MultilinearExtension};
     use ark_std::test_rng;
     use std::{marker::PhantomData, sync::Arc};
 
-    type KZG = MultilinearKzgPCS<Bls12_381>;
+    type Hyrax = MultilinearHyraxPCS<G1>;
 
-    fn test_permutation_check_helper<E, PCS>(
+    fn test_permutation_check_helper<C, PCS>(
         pcs_param: &PCS::ProverParam,
-        fxs: &[Arc<DenseMultilinearExtension<E::Fr>>],
-        gxs: &[Arc<DenseMultilinearExtension<E::Fr>>],
-        perms: &[Arc<DenseMultilinearExtension<E::Fr>>],
+        fxs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
+        gxs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
+        perms: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
     ) -> Result<(), PolyIOPErrors>
     where
-        E: PairingEngine,
-        PCS: PolynomialCommitmentScheme<E, Polynomial = Arc<DenseMultilinearExtension<E::Fr>>>,
+        C: AffineCurve,
+        PCS: PolynomialCommitmentScheme<
+            C,
+            Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>,
+        >,
     {
         let nv = fxs[0].num_vars;
         // what's AuxInfo used for?
@@ -215,20 +218,23 @@ mod test {
         };
 
         // prover
-        let mut transcript = <PolyIOP<E::Fr> as PermutationCheck<E, PCS>>::init_transcript();
+        let mut transcript =
+            <PolyIOP<C::ScalarField> as PermutationCheck<C, PCS>>::init_transcript();
         transcript.append_message(b"testing", b"initializing transcript for testing")?;
-        let (proof, prod_x, _frac_poly) = <PolyIOP<E::Fr> as PermutationCheck<E, PCS>>::prove(
-            pcs_param,
-            fxs,
-            gxs,
-            perms,
-            &mut transcript,
-        )?;
+        let (proof, prod_x, _frac_poly) =
+            <PolyIOP<C::ScalarField> as PermutationCheck<C, PCS>>::prove(
+                pcs_param,
+                fxs,
+                gxs,
+                perms,
+                &mut transcript,
+            )?;
 
         // verifier
-        let mut transcript = <PolyIOP<E::Fr> as PermutationCheck<E, PCS>>::init_transcript();
+        let mut transcript =
+            <PolyIOP<C::ScalarField> as PermutationCheck<C, PCS>>::init_transcript();
         transcript.append_message(b"testing", b"initializing transcript for testing")?;
-        let perm_check_sub_claim = <PolyIOP<E::Fr> as PermutationCheck<E, PCS>>::verify(
+        let perm_check_sub_claim = <PolyIOP<C::ScalarField> as PermutationCheck<C, PCS>>::verify(
             &proof,
             &poly_info,
             &mut transcript,
@@ -249,8 +255,8 @@ mod test {
     fn test_permutation_check(nv: usize) -> Result<(), PolyIOPErrors> {
         let mut rng = test_rng();
 
-        let srs = MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, nv)?;
-        let (pcs_param, _) = MultilinearKzgPCS::<Bls12_381>::trim(&srs, None, Some(nv))?;
+        let srs = MultilinearHyraxPCS::gen_srs_for_testing(&mut rng, nv)?;
+        let (pcs_param, _) = MultilinearHyraxPCS::<G1>::trim(&srs, None, Some(nv))?;
         let id_perms = identity_permutation_mles(nv, 2);
 
         {
@@ -261,7 +267,7 @@ mod test {
                 Arc::new(DenseMultilinearExtension::rand(nv, &mut rng)),
             ];
             // perms is the identity map
-            test_permutation_check_helper::<Bls12_381, KZG>(&pcs_param, &ws, &ws, &id_perms)?;
+            test_permutation_check_helper::<G1, Hyrax>(&pcs_param, &ws, &ws, &id_perms)?;
         }
 
         {
@@ -275,7 +281,7 @@ mod test {
             // perms is the reverse identity map
             let mut perms = id_perms.clone();
             perms.reverse();
-            test_permutation_check_helper::<Bls12_381, KZG>(&pcs_param, &fs, &gs, &perms)?;
+            test_permutation_check_helper::<G1, Hyrax>(&pcs_param, &fs, &gs, &perms)?;
         }
 
         {
@@ -288,8 +294,7 @@ mod test {
             let perms = random_permutation_mles(nv, 2, &mut rng);
 
             assert!(
-                test_permutation_check_helper::<Bls12_381, KZG>(&pcs_param, &ws, &ws, &perms)
-                    .is_err()
+                test_permutation_check_helper::<G1, Hyrax>(&pcs_param, &ws, &ws, &perms).is_err()
             );
         }
 
@@ -305,10 +310,10 @@ mod test {
             ];
             // s_perm is the identity map
 
-            assert!(test_permutation_check_helper::<Bls12_381, KZG>(
-                &pcs_param, &fs, &gs, &id_perms
-            )
-            .is_err());
+            assert!(
+                test_permutation_check_helper::<G1, Hyrax>(&pcs_param, &fs, &gs, &id_perms)
+                    .is_err()
+            );
         }
 
         Ok(())

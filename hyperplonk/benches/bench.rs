@@ -1,19 +1,13 @@
 use std::{fs::File, io, time::Instant};
 
-use ark_bls12_381::{Bls12_381, Fr};
+use ark_bls12_381::{G1Affine as C, Fr};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Write};
 use ark_std::test_rng;
 use hyperplonk::{
     prelude::{CustomizedGates, HyperPlonkErrors, MockCircuit},
     HyperPlonkSNARK,
 };
-use subroutines::{
-    pcs::{
-        prelude::{MultilinearKzgPCS, MultilinearUniversalParams},
-        PolynomialCommitmentScheme,
-    },
-    poly_iop::PolyIOP,
-};
+use subroutines::{pcs::PolynomialCommitmentScheme, poly_iop::PolyIOP, MultilinearHyraxPCS, PolyCommitmentGens};
 
 const SUPPORTED_SIZE: usize = 20;
 const MIN_NUM_VARS: usize = 8;
@@ -31,10 +25,10 @@ fn main() -> Result<(), HyperPlonkErrors> {
             Ok(p) => p,
             Err(_e) => {
                 let srs =
-                    MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
+                    MultilinearHyraxPCS::<C>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
                 write_srs(&srs);
                 srs
-            },
+            }
         }
     };
     bench_jellyfish_plonk(&pcs_srs, thread)?;
@@ -50,18 +44,18 @@ fn main() -> Result<(), HyperPlonkErrors> {
     Ok(())
 }
 
-fn read_srs() -> Result<MultilinearUniversalParams<Bls12_381>, io::Error> {
+fn read_srs() -> Result<PolyCommitmentGens<C>, io::Error> {
     let mut f = File::open("srs.params")?;
-    Ok(MultilinearUniversalParams::<Bls12_381>::deserialize_unchecked(&mut f).unwrap())
+    Ok(PolyCommitmentGens::<C>::deserialize_unchecked(&mut f).unwrap())
 }
 
-fn write_srs(pcs_srs: &MultilinearUniversalParams<Bls12_381>) {
+fn write_srs(pcs_srs: &PolyCommitmentGens<C>) {
     let mut f = File::create("srs.params").unwrap();
     pcs_srs.serialize_uncompressed(&mut f).unwrap();
 }
 
 fn bench_vanilla_plonk(
-    pcs_srs: &MultilinearUniversalParams<Bls12_381>,
+    pcs_srs: &PolyCommitmentGens<C>,
     thread: usize,
 ) -> Result<(), HyperPlonkErrors> {
     let filename = format!("vanilla threads {}.txt", thread);
@@ -75,7 +69,7 @@ fn bench_vanilla_plonk(
 }
 
 fn bench_jellyfish_plonk(
-    pcs_srs: &MultilinearUniversalParams<Bls12_381>,
+    pcs_srs: &PolyCommitmentGens<C>,
     thread: usize,
 ) -> Result<(), HyperPlonkErrors> {
     let filename = format!("jellyfish threads {}.txt", thread);
@@ -89,7 +83,7 @@ fn bench_jellyfish_plonk(
 }
 
 fn bench_high_degree_plonk(
-    pcs_srs: &MultilinearUniversalParams<Bls12_381>,
+    pcs_srs: &PolyCommitmentGens<C>,
     degree: usize,
     thread: usize,
 ) -> Result<(), HyperPlonkErrors> {
@@ -106,7 +100,7 @@ fn bench_mock_circuit_zkp_helper(
     file: &mut File,
     nv: usize,
     gate: &CustomizedGates,
-    pcs_srs: &MultilinearUniversalParams<Bls12_381>,
+    pcs_srs: &PolyCommitmentGens<C>,
 ) -> Result<(), HyperPlonkErrors> {
     let repetition = if nv < 10 {
         5
@@ -125,8 +119,8 @@ fn bench_mock_circuit_zkp_helper(
     let start = Instant::now();
     for _ in 0..repetition {
         let (_pk, _vk) = <PolyIOP<Fr> as HyperPlonkSNARK<
-            Bls12_381,
-            MultilinearKzgPCS<Bls12_381>,
+            C,
+            MultilinearHyraxPCS<C>,
         >>::preprocess(&index, &pcs_srs)?;
     }
     println!(
@@ -135,7 +129,7 @@ fn bench_mock_circuit_zkp_helper(
         start.elapsed().as_micros() / repetition as u128
     );
     let (pk, vk) =
-        <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::preprocess(
+        <PolyIOP<Fr> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::preprocess(
             &index, &pcs_srs,
         )?;
     //==========================================================
@@ -143,7 +137,7 @@ fn bench_mock_circuit_zkp_helper(
     let start = Instant::now();
     for _ in 0..repetition {
         let _proof =
-            <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::prove(
+            <PolyIOP<Fr> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::prove(
                 &pk,
                 &circuit.public_inputs,
                 &circuit.witnesses,
@@ -157,7 +151,7 @@ fn bench_mock_circuit_zkp_helper(
     );
     file.write_all(format!("{} {}\n", nv, t).as_ref()).unwrap();
 
-    let proof = <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::prove(
+    let proof = <PolyIOP<Fr> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::prove(
         &pk,
         &circuit.public_inputs,
         &circuit.witnesses,
@@ -167,7 +161,7 @@ fn bench_mock_circuit_zkp_helper(
     let start = Instant::now();
     for _ in 0..repetition {
         let verify =
-            <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::verify(
+            <PolyIOP<Fr> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::verify(
                 &vk,
                 &circuit.public_inputs,
                 &proof,
