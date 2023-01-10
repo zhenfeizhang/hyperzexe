@@ -1,4 +1,4 @@
-KZG based multilinear polynomial commitment
+Hyrax based multilinear polynomial commitment
 -----
 
 # Compiling features:
