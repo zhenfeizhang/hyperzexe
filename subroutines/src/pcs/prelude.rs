@@ -7,15 +7,11 @@
 //! Prelude
 pub use crate::pcs::{
     errors::PCSError,
-    multilinear_kzg::{
+    multilinear_hyrax::{
         batching::BatchProof,
-        srs::{MultilinearProverParam, MultilinearUniversalParams, MultilinearVerifierParam},
-        MultilinearKzgPCS, MultilinearKzgProof,
+        dense_mlpoly::{PolyCommitmentBlinds, PolyCommitmentGens},
+        MultilinearHyraxPCS,
     },
-    structs::Commitment,
-    univariate_kzg::{
-        srs::{UnivariateProverParam, UnivariateUniversalParams, UnivariateVerifierParam},
-        UnivariateKzgBatchProof, UnivariateKzgPCS, UnivariateKzgProof,
-    },
-    PolynomialCommitmentScheme, StructuredReferenceString,
+    structs::HyraxCommitment,
+    PolynomialCommitmentScheme,
 };

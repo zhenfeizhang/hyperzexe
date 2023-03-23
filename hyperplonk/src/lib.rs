@@ -1,6 +1,9 @@
 //! Main module for the HyperPlonk SNARK.
 
-use ark_ec::PairingEngine;
+use std::sync::Arc;
+
+use arithmetic::DenseMultilinearExtension;
+use ark_ec::AffineCurve;
 use errors::HyperPlonkErrors;
 use subroutines::{pcs::prelude::PolynomialCommitmentScheme, poly_iop::prelude::PermutationCheck};
 use witness::WitnessColumn;
@@ -17,10 +20,10 @@ mod witness;
 
 /// A trait for HyperPlonk SNARKs.
 /// A HyperPlonk is derived from ZeroChecks and PermutationChecks.
-pub trait HyperPlonkSNARK<E, PCS>: PermutationCheck<E, PCS>
+pub trait HyperPlonkSNARK<C, PCS>: PermutationCheck<C, PCS>
 where
-    E: PairingEngine,
-    PCS: PolynomialCommitmentScheme<E>,
+    C: AffineCurve,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
 {
     type Index;
     type ProvingKey;
@@ -52,8 +55,8 @@ where
     /// - The HyperPlonk SNARK proof.
     fn prove(
         pk: &Self::ProvingKey,
-        pub_input: &[E::Fr],
-        witnesses: &[WitnessColumn<E::Fr>],
+        pub_input: &[C::ScalarField],
+        witnesses: &[WitnessColumn<C::ScalarField>],
     ) -> Result<Self::Proof, HyperPlonkErrors>;
 
     /// Verify the HyperPlonk proof.
@@ -66,7 +69,7 @@ where
     /// - Return a boolean on whether the verification is successful
     fn verify(
         vk: &Self::VerifyingKey,
-        pub_input: &[E::Fr],
+        pub_input: &[C::ScalarField],
         proof: &Self::Proof,
     ) -> Result<bool, HyperPlonkErrors>;
 }

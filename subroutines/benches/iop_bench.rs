@@ -1,16 +1,16 @@
 use arithmetic::{identity_permutation_mles, VPAuxInfo, VirtualPolynomial};
-use ark_bls12_381::{Bls12_381, Fr};
+use ark_bls12_381::{G1Affine as G1, Fr};
 use ark_poly::{DenseMultilinearExtension, MultilinearExtension};
 use ark_std::test_rng;
 use std::{marker::PhantomData, sync::Arc, time::Instant};
 use subroutines::{
-    pcs::{prelude::MultilinearKzgPCS, PolynomialCommitmentScheme},
+    pcs::{prelude::MultilinearHyraxPCS, PolynomialCommitmentScheme},
     poly_iop::prelude::{
         PermutationCheck, PolyIOP, PolyIOPErrors, ProductCheck, SumCheck, ZeroCheck,
     },
 };
 
-type KZG = MultilinearKzgPCS<Bls12_381>;
+type Hyrax = MultilinearHyraxPCS<G1>;
 
 fn main() -> Result<(), PolyIOPErrors> {
     bench_permutation_check()?;
@@ -133,8 +133,8 @@ fn bench_permutation_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
 
     for nv in 4..20 {
-        let srs = KZG::gen_srs_for_testing(&mut rng, nv + 1)?;
-        let (pcs_param, _) = KZG::trim(&srs, None, Some(nv + 1))?;
+        let srs = Hyrax::gen_srs_for_testing(&mut rng, nv + 1)?;
+        let (pcs_param, _) = Hyrax::trim(&srs, None, Some(nv + 1))?;
 
         let repetition = if nv < 10 {
             100
@@ -153,12 +153,12 @@ fn bench_permutation_check() -> Result<(), PolyIOPErrors> {
             {
                 let start = Instant::now();
                 let mut transcript =
-                    <PolyIOP<Fr> as PermutationCheck<Bls12_381, KZG>>::init_transcript();
+                    <PolyIOP<Fr> as PermutationCheck<G1, Hyrax>>::init_transcript();
                 transcript.append_message(b"testing", b"initializing transcript for testing")?;
 
                 let (proof, _q_x, _frac_poly) = <PolyIOP<Fr> as PermutationCheck<
-                    Bls12_381,
-                    KZG,
+                    G1,
+                    Hyrax,
                 >>::prove(
                     &pcs_param, &ws, &ws, &perms, &mut transcript
                 )?;
@@ -180,9 +180,9 @@ fn bench_permutation_check() -> Result<(), PolyIOPErrors> {
 
             let start = Instant::now();
             let mut transcript =
-                <PolyIOP<Fr> as PermutationCheck<Bls12_381, KZG>>::init_transcript();
+                <PolyIOP<Fr> as PermutationCheck<G1, Hyrax>>::init_transcript();
             transcript.append_message(b"testing", b"initializing transcript for testing")?;
-            let _perm_check_sum_claim = <PolyIOP<Fr> as PermutationCheck<Bls12_381, KZG>>::verify(
+            let _perm_check_sum_claim = <PolyIOP<Fr> as PermutationCheck<G1, Hyrax>>::verify(
                 &proof,
                 &poly_info,
                 &mut transcript,
@@ -204,8 +204,8 @@ fn bench_prod_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
 
     for nv in 4..20 {
-        let srs = KZG::gen_srs_for_testing(&mut rng, nv + 1)?;
-        let (pcs_param, _) = KZG::trim(&srs, None, Some(nv + 1))?;
+        let srs = Hyrax::gen_srs_for_testing(&mut rng, nv + 1)?;
+        let (pcs_param, _) = Hyrax::trim(&srs, None, Some(nv + 1))?;
 
         let repetition = if nv < 10 {
             100
@@ -223,11 +223,11 @@ fn bench_prod_check() -> Result<(), PolyIOPErrors> {
 
         let proof = {
             let start = Instant::now();
-            let mut transcript = <PolyIOP<Fr> as ProductCheck<Bls12_381, KZG>>::init_transcript();
+            let mut transcript = <PolyIOP<Fr> as ProductCheck<G1, Hyrax>>::init_transcript();
             transcript.append_message(b"testing", b"initializing transcript for testing")?;
 
             let (proof, _prod_x, _frac_poly) =
-                <PolyIOP<Fr> as ProductCheck<Bls12_381, KZG>>::prove(
+                <PolyIOP<Fr> as ProductCheck<G1, Hyrax>>::prove(
                     &pcs_param,
                     &fs,
                     &gs,
@@ -250,9 +250,9 @@ fn bench_prod_check() -> Result<(), PolyIOPErrors> {
             };
 
             let start = Instant::now();
-            let mut transcript = <PolyIOP<Fr> as ProductCheck<Bls12_381, KZG>>::init_transcript();
+            let mut transcript = <PolyIOP<Fr> as ProductCheck<G1, Hyrax>>::init_transcript();
             transcript.append_message(b"testing", b"initializing transcript for testing")?;
-            let _perm_check_sum_claim = <PolyIOP<Fr> as ProductCheck<Bls12_381, KZG>>::verify(
+            let _perm_check_sum_claim = <PolyIOP<Fr> as ProductCheck<G1, Hyrax>>::verify(
                 &proof,
                 &poly_info,
                 &mut transcript,

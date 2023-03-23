@@ -1,12 +1,10 @@
 mod errors;
-mod multilinear_kzg;
+mod multilinear_hyrax;
 mod structs;
-mod univariate_kzg;
 
 pub mod prelude;
 
-use ark_ec::PairingEngine;
-use ark_ff::Field;
+use ark_ec::AffineCurve;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::rand::{CryptoRng, RngCore};
 use errors::PCSError;
@@ -15,7 +13,7 @@ use transcript::IOPTranscript;
 
 /// This trait defines APIs for polynomial commitment schemes.
 /// Note that for our usage of PCS, we do not require the hiding property.
-pub trait PolynomialCommitmentScheme<E: PairingEngine> {
+pub trait PolynomialCommitmentScheme<C: AffineCurve> {
     /// Prover parameters
     type ProverParam: Clone + Sync;
     /// Verifier parameters
@@ -26,8 +24,6 @@ pub trait PolynomialCommitmentScheme<E: PairingEngine> {
     type Polynomial: Clone + Debug + Hash + PartialEq + Eq;
     /// Polynomial input domain
     type Point: Clone + Ord + Debug + Sync + Hash + PartialEq + Eq;
-    /// Polynomial Evaluation
-    type Evaluation: Field;
     /// Commitments
     type Commitment: Clone + CanonicalSerialize + CanonicalDeserialize + Debug + PartialEq + Eq;
     /// Proofs
@@ -84,21 +80,18 @@ pub trait PolynomialCommitmentScheme<E: PairingEngine> {
         prover_param: impl Borrow<Self::ProverParam>,
         polynomial: &Self::Polynomial,
         point: &Self::Point,
-    ) -> Result<(Self::Proof, Self::Evaluation), PCSError>;
+        transcript: &mut IOPTranscript<C::ScalarField>,
+    ) -> Result<(Self::Proof, C::ScalarField), PCSError>;
 
     /// Input a list of multilinear extensions, and a same number of points, and
     /// a transcript, compute a multi-opening for all the polynomials.
     fn multi_open(
-        _prover_param: impl Borrow<Self::ProverParam>,
-        _polynomials: &[Self::Polynomial],
-        _points: &[Self::Point],
-        _evals: &[Self::Evaluation],
-        _transcript: &mut IOPTranscript<E::Fr>,
-    ) -> Result<Self::BatchProof, PCSError> {
-        // the reason we use unimplemented!() is to enable developers to implement the
-        // trait without always implementing the batching APIs.
-        unimplemented!()
-    }
+        prover_param: impl Borrow<Self::ProverParam>,
+        polynomials: &[Self::Polynomial],
+        points: &[Self::Point],
+        evals: &[C::ScalarField],
+        transcript: &mut IOPTranscript<C::ScalarField>,
+    ) -> Result<Self::BatchProof, PCSError>;
 
     /// Verifies that `value` is the evaluation at `x` of the polynomial
     /// committed inside `comm`.
@@ -106,61 +99,18 @@ pub trait PolynomialCommitmentScheme<E: PairingEngine> {
         verifier_param: &Self::VerifierParam,
         commitment: &Self::Commitment,
         point: &Self::Point,
-        value: &E::Fr,
+        value: &C::ScalarField,
         proof: &Self::Proof,
+        transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<bool, PCSError>;
 
     /// Verifies that `value_i` is the evaluation at `x_i` of the polynomial
     /// `poly_i` committed inside `comm`.
     fn batch_verify(
-        _verifier_param: &Self::VerifierParam,
-        _commitments: &[Self::Commitment],
-        _points: &[Self::Point],
-        _batch_proof: &Self::BatchProof,
-        _transcript: &mut IOPTranscript<E::Fr>,
-    ) -> Result<bool, PCSError> {
-        // the reason we use unimplemented!() is to enable developers to implement the
-        // trait without always implementing the batching APIs.
-        unimplemented!()
-    }
-}
-
-/// API definitions for structured reference string
-pub trait StructuredReferenceString<E: PairingEngine>: Sized {
-    /// Prover parameters
-    type ProverParam;
-    /// Verifier parameters
-    type VerifierParam;
-
-    /// Extract the prover parameters from the public parameters.
-    fn extract_prover_param(&self, supported_size: usize) -> Self::ProverParam;
-    /// Extract the verifier parameters from the public parameters.
-    fn extract_verifier_param(&self, supported_size: usize) -> Self::VerifierParam;
-
-    /// Trim the universal parameters to specialize the public parameters
-    /// for polynomials to the given `supported_size`, and
-    /// returns committer key and verifier key.
-    ///
-    /// - For univariate polynomials, `supported_size` is the maximum degree.
-    /// - For multilinear polynomials, `supported_size` is 2 to the number of
-    ///   variables.
-    ///
-    /// `supported_log_size` should be in range `1..=params.log_size`
-    fn trim(
-        &self,
-        supported_size: usize,
-    ) -> Result<(Self::ProverParam, Self::VerifierParam), PCSError>;
-
-    /// Build SRS for testing.
-    ///
-    /// - For univariate polynomials, `supported_size` is the maximum degree.
-    /// - For multilinear polynomials, `supported_size` is the number of
-    ///   variables.
-    ///
-    /// WARNING: THIS FUNCTION IS FOR TESTING PURPOSE ONLY.
-    /// THE OUTPUT SRS SHOULD NOT BE USED IN PRODUCTION.
-    fn gen_srs_for_testing<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        supported_size: usize,
-    ) -> Result<Self, PCSError>;
+        verifier_param: &Self::VerifierParam,
+        commitments: &[&Self::Commitment],
+        points: &[Self::Point],
+        batch_proof: &Self::BatchProof,
+        transcript: &mut IOPTranscript<C::ScalarField>,
+    ) -> Result<bool, PCSError>;
 }

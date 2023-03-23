@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use arithmetic::VPAuxInfo;
-use ark_ec::PairingEngine;
+use ark_ec::AffineCurve;
 use ark_ff::{One, PrimeField, Zero};
 use ark_poly::DenseMultilinearExtension;
 use ark_std::{end_timer, start_timer};
@@ -46,10 +46,10 @@ mod util;
 /// 2. `generate_challenge` from current transcript (generate alpha)
 /// 3. `verify` to verify the zerocheck proof and generate the subclaim for
 /// polynomial evaluations
-pub trait ProductCheck<E, PCS>: ZeroCheck<E::Fr>
+pub trait ProductCheck<C, PCS>: ZeroCheck<C::ScalarField>
 where
-    E: PairingEngine,
-    PCS: PolynomialCommitmentScheme<E>,
+    C: AffineCurve,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
 {
     type ProductCheckSubClaim;
     type ProductCheckProof;
@@ -84,7 +84,7 @@ where
         pcs_param: &PCS::ProverParam,
         fxs: &[Self::MultilinearExtension],
         gxs: &[Self::MultilinearExtension],
-        transcript: &mut IOPTranscript<E::Fr>,
+        transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<
         (
             Self::ProductCheckProof,
@@ -100,7 +100,7 @@ where
     ///     = \prod_{x \in {0,1}^n} g1(x) * ... * gk(x)`
     fn verify(
         proof: &Self::ProductCheckProof,
-        aux_info: &VPAuxInfo<E::Fr>,
+        aux_info: &VPAuxInfo<C::ScalarField>,
         transcript: &mut Self::Transcript,
     ) -> Result<Self::ProductCheckSubClaim, PolyIOPErrors>;
 }
@@ -130,32 +130,32 @@ pub struct ProductCheckSubClaim<F: PrimeField, ZC: ZeroCheck<F>> {
 /// - a polynomial commitment for the fractional polynomial
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProductCheckProof<
-    E: PairingEngine,
-    PCS: PolynomialCommitmentScheme<E>,
-    ZC: ZeroCheck<E::Fr>,
+    C: AffineCurve,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
+    ZC: ZeroCheck<C::ScalarField>,
 > {
     pub zero_check_proof: ZC::ZeroCheckProof,
     pub prod_x_comm: PCS::Commitment,
     pub frac_comm: PCS::Commitment,
 }
 
-impl<E, PCS> ProductCheck<E, PCS> for PolyIOP<E::Fr>
+impl<C, PCS> ProductCheck<C, PCS> for PolyIOP<C::ScalarField>
 where
-    E: PairingEngine,
-    PCS: PolynomialCommitmentScheme<E, Polynomial = Arc<DenseMultilinearExtension<E::Fr>>>,
+    C: AffineCurve,
+    PCS: PolynomialCommitmentScheme<C, Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>>,
 {
-    type ProductCheckSubClaim = ProductCheckSubClaim<E::Fr, Self>;
-    type ProductCheckProof = ProductCheckProof<E, PCS, Self>;
+    type ProductCheckSubClaim = ProductCheckSubClaim<C::ScalarField, Self>;
+    type ProductCheckProof = ProductCheckProof<C, PCS, Self>;
 
     fn init_transcript() -> Self::Transcript {
-        IOPTranscript::<E::Fr>::new(b"Initializing ProductCheck transcript")
+        IOPTranscript::<C::ScalarField>::new(b"Initializing ProductCheck transcript")
     }
 
     fn prove(
         pcs_param: &PCS::ProverParam,
         fxs: &[Self::MultilinearExtension],
         gxs: &[Self::MultilinearExtension],
-        transcript: &mut IOPTranscript<E::Fr>,
+        transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<
         (
             Self::ProductCheckProof,
@@ -214,7 +214,7 @@ where
 
     fn verify(
         proof: &Self::ProductCheckProof,
-        aux_info: &VPAuxInfo<E::Fr>,
+        aux_info: &VPAuxInfo<C::ScalarField>,
         transcript: &mut Self::Transcript,
     ) -> Result<Self::ProductCheckSubClaim, PolyIOPErrors> {
         let start = start_timer!(|| "prod_check verify");
@@ -226,14 +226,17 @@ where
 
         // invoke the zero check on the iop_proof
         // the virtual poly info for Q(x)
-        let zero_check_sub_claim =
-            <Self as ZeroCheck<E::Fr>>::verify(&proof.zero_check_proof, aux_info, transcript)?;
+        let zero_check_sub_claim = <Self as ZeroCheck<C::ScalarField>>::verify(
+            &proof.zero_check_proof,
+            aux_info,
+            transcript,
+        )?;
 
         // the final query is on prod_x
-        let mut final_query = vec![E::Fr::one(); aux_info.num_variables];
+        let mut final_query = vec![C::ScalarField::one(); aux_info.num_variables];
         // the point has to be reversed because Arkworks uses big-endian.
-        final_query[0] = E::Fr::zero();
-        let final_eval = E::Fr::one();
+        final_query[0] = C::ScalarField::zero();
+        let final_eval = C::ScalarField::one();
 
         end_timer!(start);
 
@@ -249,32 +252,30 @@ where
 mod test {
     use super::ProductCheck;
     use crate::{
-        pcs::{prelude::MultilinearKzgPCS, PolynomialCommitmentScheme},
+        pcs::{prelude::MultilinearHyraxPCS, PolynomialCommitmentScheme},
         poly_iop::{errors::PolyIOPErrors, PolyIOP},
     };
     use arithmetic::VPAuxInfo;
-    use ark_bls12_381::{Bls12_381, Fr};
-    use ark_ec::PairingEngine;
+    use ark_bls12_381::{Fr, G1Affine as G1};
+    use ark_ec::AffineCurve;
     use ark_poly::{DenseMultilinearExtension, MultilinearExtension};
     use ark_std::test_rng;
     use std::{marker::PhantomData, sync::Arc};
 
-    fn check_frac_poly<E>(
-        frac_poly: &Arc<DenseMultilinearExtension<E::Fr>>,
-        fs: &[Arc<DenseMultilinearExtension<E::Fr>>],
-        gs: &[Arc<DenseMultilinearExtension<E::Fr>>],
-    ) where
-        E: PairingEngine,
-    {
+    fn check_frac_poly<C: AffineCurve>(
+        frac_poly: &Arc<DenseMultilinearExtension<C::ScalarField>>,
+        fs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
+        gs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
+    ) {
         let mut flag = true;
         let num_vars = frac_poly.num_vars;
         for i in 0..1 << num_vars {
             let nom = fs
                 .iter()
-                .fold(E::Fr::from(1u8), |acc, f| acc * f.evaluations[i]);
+                .fold(C::ScalarField::from(1u8), |acc, f| acc * f.evaluations[i]);
             let denom = gs
                 .iter()
-                .fold(E::Fr::from(1u8), |acc, g| acc * g.evaluations[i]);
+                .fold(C::ScalarField::from(1u8), |acc, g| acc * g.evaluations[i]);
             if denom * frac_poly.evaluations[i] != nom {
                 flag = false;
                 break;
@@ -284,23 +285,30 @@ mod test {
     }
     // fs and gs are guaranteed to have the same product
     // fs and hs doesn't have the same product
-    fn test_product_check_helper<E, PCS>(
-        fs: &[Arc<DenseMultilinearExtension<E::Fr>>],
-        gs: &[Arc<DenseMultilinearExtension<E::Fr>>],
-        hs: &[Arc<DenseMultilinearExtension<E::Fr>>],
+    fn test_product_check_helper<C, PCS>(
+        fs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
+        gs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
+        hs: &[Arc<DenseMultilinearExtension<C::ScalarField>>],
         pcs_param: &PCS::ProverParam,
     ) -> Result<(), PolyIOPErrors>
     where
-        E: PairingEngine,
-        PCS: PolynomialCommitmentScheme<E, Polynomial = Arc<DenseMultilinearExtension<E::Fr>>>,
+        C: AffineCurve,
+        PCS: PolynomialCommitmentScheme<
+            C,
+            Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>,
+        >,
     {
-        let mut transcript = <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::init_transcript();
+        let mut transcript = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::init_transcript();
         transcript.append_message(b"testing", b"initializing transcript for testing")?;
 
-        let (proof, prod_x, frac_poly) =
-            <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::prove(pcs_param, fs, gs, &mut transcript)?;
+        let (proof, prod_x, frac_poly) = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::prove(
+            pcs_param,
+            fs,
+            gs,
+            &mut transcript,
+        )?;
 
-        let mut transcript = <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::init_transcript();
+        let mut transcript = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::init_transcript();
         transcript.append_message(b"testing", b"initializing transcript for testing")?;
 
         // what's aux_info for?
@@ -309,25 +317,32 @@ mod test {
             num_variables: fs[0].num_vars,
             phantom: PhantomData::default(),
         };
-        let prod_subclaim =
-            <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::verify(&proof, &aux_info, &mut transcript)?;
+        let prod_subclaim = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::verify(
+            &proof,
+            &aux_info,
+            &mut transcript,
+        )?;
         assert_eq!(
             prod_x.evaluate(&prod_subclaim.final_query.0).unwrap(),
             prod_subclaim.final_query.1,
             "different product"
         );
-        check_frac_poly::<E>(&frac_poly, fs, gs);
+        check_frac_poly::<C>(&frac_poly, fs, gs);
 
         // bad path
-        let mut transcript = <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::init_transcript();
+        let mut transcript = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::init_transcript();
         transcript.append_message(b"testing", b"initializing transcript for testing")?;
 
-        let (bad_proof, prod_x_bad, frac_poly) =
-            <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::prove(pcs_param, fs, hs, &mut transcript)?;
+        let (bad_proof, prod_x_bad, frac_poly) = <PolyIOP<C::ScalarField> as ProductCheck<
+            C,
+            PCS,
+        >>::prove(
+            pcs_param, fs, hs, &mut transcript
+        )?;
 
-        let mut transcript = <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::init_transcript();
+        let mut transcript = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::init_transcript();
         transcript.append_message(b"testing", b"initializing transcript for testing")?;
-        let bad_subclaim = <PolyIOP<E::Fr> as ProductCheck<E, PCS>>::verify(
+        let bad_subclaim = <PolyIOP<C::ScalarField> as ProductCheck<C, PCS>>::verify(
             &bad_proof,
             &aux_info,
             &mut transcript,
@@ -338,7 +353,7 @@ mod test {
             "can't detect wrong proof"
         );
         // the frac_poly should still be computed correctly
-        check_frac_poly::<E>(&frac_poly, fs, hs);
+        check_frac_poly::<C>(&frac_poly, fs, hs);
 
         Ok(())
     }
@@ -362,12 +377,10 @@ mod test {
             )));
         }
 
-        let srs = MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, nv)?;
-        let (pcs_param, _) = MultilinearKzgPCS::<Bls12_381>::trim(&srs, None, Some(nv))?;
+        let srs = MultilinearHyraxPCS::<G1>::gen_srs_for_testing(&mut rng, nv)?;
+        let (pcs_param, _) = MultilinearHyraxPCS::<G1>::trim(&srs, None, Some(nv))?;
 
-        test_product_check_helper::<Bls12_381, MultilinearKzgPCS<Bls12_381>>(
-            &fs, &gs, &hs, &pcs_param,
-        )?;
+        test_product_check_helper::<G1, MultilinearHyraxPCS<G1>>(&fs, &gs, &hs, &pcs_param)?;
 
         Ok(())
     }

@@ -140,10 +140,10 @@ impl<F: PrimeField> MockCircuit<F> {
 mod test {
     use super::*;
     use crate::{errors::HyperPlonkErrors, HyperPlonkSNARK};
-    use ark_bls12_381::{Bls12_381, Fr};
+    use ark_bls12_381::{G1Affine as G1, Fr};
     use subroutines::{
         pcs::{
-            prelude::{MultilinearKzgPCS, MultilinearUniversalParams},
+            prelude::{MultilinearHyraxPCS, PolyCommitmentGens},
             PolynomialCommitmentScheme,
         },
         poly_iop::PolyIOP,
@@ -178,7 +178,7 @@ mod test {
     fn test_mock_circuit_zkp_helper(
         nv: usize,
         gate: &CustomizedGates,
-        pcs_srs: &MultilinearUniversalParams<Bls12_381>,
+        pcs_srs: &PolyCommitmentGens<G1>,
     ) -> Result<(), HyperPlonkErrors> {
         let circuit = MockCircuit::<Fr>::new(1 << nv, gate);
         assert!(circuit.is_satisfied());
@@ -186,19 +186,19 @@ mod test {
         let index = circuit.index;
         // generate pk and vks
         let (pk, vk) =
-            <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::preprocess(
+            <PolyIOP<Fr> as HyperPlonkSNARK<G1, MultilinearHyraxPCS<G1>>>::preprocess(
                 &index, &pcs_srs,
             )?;
         // generate a proof and verify
         let proof =
-            <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::prove(
+            <PolyIOP<Fr> as HyperPlonkSNARK<G1, MultilinearHyraxPCS<G1>>>::prove(
                 &pk,
                 &circuit.public_inputs,
                 &circuit.witnesses,
             )?;
 
         let verify =
-            <PolyIOP<Fr> as HyperPlonkSNARK<Bls12_381, MultilinearKzgPCS<Bls12_381>>>::verify(
+            <PolyIOP<Fr> as HyperPlonkSNARK<G1, MultilinearHyraxPCS<G1>>>::verify(
                 &vk,
                 &circuit.public_inputs,
                 &proof,
@@ -211,7 +211,7 @@ mod test {
     fn test_mock_circuit_zkp() -> Result<(), HyperPlonkErrors> {
         let mut rng = test_rng();
         let pcs_srs =
-            MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
+            MultilinearHyraxPCS::<G1>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
         for nv in MIN_NUM_VARS..MAX_NUM_VARS {
             let vanilla_gate = CustomizedGates::vanilla_plonk_gate();
             test_mock_circuit_zkp_helper(nv, &vanilla_gate, &pcs_srs)?;
@@ -235,7 +235,7 @@ mod test {
     fn test_mock_circuit_e2e() -> Result<(), HyperPlonkErrors> {
         let mut rng = test_rng();
         let pcs_srs =
-            MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
+            MultilinearHyraxPCS::<G1>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
         let nv = MAX_NUM_VARS;
 
         let turboplonk_gate = CustomizedGates::jellyfish_turbo_plonk_gate();
@@ -248,7 +248,7 @@ mod test {
     fn test_mock_long_selector_e2e() -> Result<(), HyperPlonkErrors> {
         let mut rng = test_rng();
         let pcs_srs =
-            MultilinearKzgPCS::<Bls12_381>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
+            MultilinearHyraxPCS::<G1>::gen_srs_for_testing(&mut rng, SUPPORTED_SIZE)?;
         let nv = MAX_NUM_VARS;
 
         let long_selector_gate = CustomizedGates::super_long_selector_gate();

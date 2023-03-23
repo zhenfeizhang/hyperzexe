@@ -6,7 +6,7 @@ use crate::{
     HyperPlonkSNARK,
 };
 use arithmetic::{evaluate_opt, gen_eval_point, VPAuxInfo};
-use ark_ec::PairingEngine;
+use ark_ec::AffineCurve;
 use ark_poly::DenseMultilinearExtension;
 use ark_std::{end_timer, log2, start_timer, One, Zero};
 use rayon::iter::IntoParallelRefIterator;
@@ -14,34 +14,32 @@ use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use std::{marker::PhantomData, sync::Arc};
 use subroutines::{
-    pcs::prelude::{Commitment, PolynomialCommitmentScheme},
+    pcs::prelude::{HyraxCommitment, PolynomialCommitmentScheme},
     poly_iop::{
         prelude::{PermutationCheck, ZeroCheck},
         PolyIOP,
-    },
-    BatchProof,
+    }, BatchProof,
 };
 use transcript::IOPTranscript;
 
-impl<E, PCS> HyperPlonkSNARK<E, PCS> for PolyIOP<E::Fr>
+impl<C, PCS> HyperPlonkSNARK<C, PCS> for PolyIOP<C::ScalarField>
 where
-    E: PairingEngine,
+    C: AffineCurve,
     // Ideally we want to access polynomial as PCS::Polynomial, instead of instantiating it here.
     // But since PCS::Polynomial can be both univariate or multivariate in our implementation
     // we cannot bound PCS::Polynomial with a property trait bound.
     PCS: PolynomialCommitmentScheme<
-        E,
-        Polynomial = Arc<DenseMultilinearExtension<E::Fr>>,
-        Point = Vec<E::Fr>,
-        Evaluation = E::Fr,
-        Commitment = Commitment<E>,
-        BatchProof = BatchProof<E, PCS>,
+        C,
+        Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>,
+        Point = Vec<C::ScalarField>,
+        Commitment = HyraxCommitment<C>,
+        BatchProof = BatchProof<C, PCS>,
     >,
 {
-    type Index = HyperPlonkIndex<E::Fr>;
-    type ProvingKey = HyperPlonkProvingKey<E, PCS>;
-    type VerifyingKey = HyperPlonkVerifyingKey<E, PCS>;
-    type Proof = HyperPlonkProof<E, Self, PCS>;
+    type Index = HyperPlonkIndex<C::ScalarField>;
+    type ProvingKey = HyperPlonkProvingKey<C, PCS>;
+    type VerifyingKey = HyperPlonkVerifyingKey<C, PCS>;
+    type Proof = HyperPlonkProof<C, Self, PCS>;
 
     fn preprocess(
         index: &Self::Index,
@@ -69,7 +67,7 @@ where
         }
 
         // build selector oracles and commit to it
-        let selector_oracles: Vec<Arc<DenseMultilinearExtension<E::Fr>>> = index
+        let selector_oracles: Vec<Arc<DenseMultilinearExtension<C::ScalarField>>> = index
             .selectors
             .iter()
             .map(|s| Arc::new(DenseMultilinearExtension::from(s)))
@@ -147,11 +145,11 @@ where
     /// - 5. deferred batch opening
     fn prove(
         pk: &Self::ProvingKey,
-        pub_input: &[E::Fr],
-        witnesses: &[WitnessColumn<E::Fr>],
+        pub_input: &[C::ScalarField],
+        witnesses: &[WitnessColumn<C::ScalarField>],
     ) -> Result<Self::Proof, HyperPlonkErrors> {
         let start = start_timer!(|| "hyperplonk proving");
-        let mut transcript = IOPTranscript::<E::Fr>::new(b"hyperplonk");
+        let mut transcript = IOPTranscript::<C::ScalarField>::new(b"hyperplonk");
 
         prover_sanity_check(&pk.params, pub_input, witnesses)?;
 
@@ -163,7 +161,7 @@ where
 
         // We use accumulators to store the polynomials and their eval points.
         // They are batch opened at a later stage.
-        let mut pcs_acc = PcsAccumulator::<E, PCS>::new(num_vars);
+        let mut pcs_acc = PcsAccumulator::<C, PCS>::new(num_vars);
 
         // =======================================================================
         // 1. Commit Witness polynomials `w_i(x)` and append commitment to
@@ -171,7 +169,7 @@ where
         // =======================================================================
         let step = start_timer!(|| "commit witnesses");
 
-        let witness_polys: Vec<Arc<DenseMultilinearExtension<E::Fr>>> = witnesses
+        let witness_polys: Vec<Arc<DenseMultilinearExtension<C::ScalarField>>> = witnesses
             .iter()
             .map(|w| Arc::new(DenseMultilinearExtension::from(w)))
             .collect();
@@ -206,7 +204,7 @@ where
             &witness_polys,
         )?;
 
-        let zero_check_proof = <Self as ZeroCheck<E::Fr>>::prove(&fx, &mut transcript)?;
+        let zero_check_proof = <Self as ZeroCheck<C::ScalarField>>::prove(&fx, &mut transcript)?;
         end_timer!(step);
         // =======================================================================
         // 3. Run permutation check on `\{w_i(x)\}` and `permutation_oracle`, and
@@ -214,7 +212,7 @@ where
         // =======================================================================
         let step = start_timer!(|| "Permutation check on w_i(x)");
 
-        let (perm_check_proof, prod_x, frac_poly) = <Self as PermutationCheck<E, PCS>>::prove(
+        let (perm_check_proof, prod_x, frac_poly) = <Self as PermutationCheck<C, PCS>>::prove(
             &pk.pcs_param,
             &witness_polys,
             &witness_polys,
@@ -253,12 +251,20 @@ where
         let step = start_timer!(|| "opening and evaluations");
 
         // (perm_check_point[2..n], 0)
-        let perm_check_point_0 = [&[E::Fr::zero()], &perm_check_point[0..num_vars - 1]].concat();
+        let perm_check_point_0 = [
+            &[C::ScalarField::zero()],
+            &perm_check_point[0..num_vars - 1],
+        ]
+        .concat();
         // (perm_check_point[2..n], 1)
-        let perm_check_point_1 = [&[E::Fr::one()], &perm_check_point[0..num_vars - 1]].concat();
+        let perm_check_point_1 =
+            [&[C::ScalarField::one()], &perm_check_point[0..num_vars - 1]].concat();
         // (1, ..., 1, 0)
-        let prod_final_query_point =
-            [vec![E::Fr::zero()], vec![E::Fr::one(); num_vars - 1]].concat();
+        let prod_final_query_point = [
+            vec![C::ScalarField::zero()],
+            vec![C::ScalarField::one(); num_vars - 1],
+        ]
+        .concat();
 
         // prod(x)'s points
         pcs_acc.insert_poly_and_points(&prod_x, &perm_check_proof.prod_x_comm, perm_check_point);
@@ -313,7 +319,7 @@ where
         //   - pi_poly(r_pi) where r_pi is sampled from transcript
         let r_pi = transcript.get_and_append_challenge_vectors(b"r_pi", ell)?;
         // padded with zeros
-        let r_pi_padded = [r_pi, vec![E::Fr::zero(); num_vars - ell]].concat();
+        let r_pi_padded = [r_pi, vec![C::ScalarField::zero(); num_vars - ell]].concat();
         // Evaluate witness_poly[0] at r_pi||0s which is equal to public_input evaluated
         // at r_pi. Assumes that public_input is a power of 2
         pcs_acc.insert_poly_and_points(&witness_polys[0], &witness_commits[0], &r_pi_padded);
@@ -373,12 +379,12 @@ where
     /// - public input consistency checks
     fn verify(
         vk: &Self::VerifyingKey,
-        pub_input: &[E::Fr],
+        pub_input: &[C::ScalarField],
         proof: &Self::Proof,
     ) -> Result<bool, HyperPlonkErrors> {
         let start = start_timer!(|| "hyperplonk verification");
 
-        let mut transcript = IOPTranscript::<E::Fr>::new(b"hyperplonk");
+        let mut transcript = IOPTranscript::<C::ScalarField>::new(b"hyperplonk");
 
         let num_selectors = vk.params.num_selector_columns();
         let num_witnesses = vk.params.num_witness_columns();
@@ -423,7 +429,7 @@ where
         // =======================================================================
         let step = start_timer!(|| "verify zero check");
         // Zero check and perm check have different AuxInfo
-        let zero_check_aux_info = VPAuxInfo::<E::Fr> {
+        let zero_check_aux_info = VPAuxInfo::<C::ScalarField> {
             max_degree: vk.params.gate_func.degree(),
             num_variables: num_vars,
             phantom: PhantomData::default(),
@@ -433,7 +439,7 @@ where
             transcript.append_serializable_element(b"w", w_com)?;
         }
 
-        let zero_check_sub_claim = <Self as ZeroCheck<E::Fr>>::verify(
+        let zero_check_sub_claim = <Self as ZeroCheck<C::ScalarField>>::verify(
             &proof.zero_check_proof,
             &zero_check_aux_info,
             &mut transcript,
@@ -456,13 +462,13 @@ where
         let step = start_timer!(|| "verify permutation check");
 
         // Zero check and perm check have different AuxInfo
-        let perm_check_aux_info = VPAuxInfo::<E::Fr> {
+        let perm_check_aux_info = VPAuxInfo::<C::ScalarField> {
             // Prod(x) has a max degree of witnesses.len() + 1
             max_degree: proof.witness_commits.len() + 1,
             num_variables: num_vars,
             phantom: PhantomData::default(),
         };
-        let perm_check_sub_claim = <Self as PermutationCheck<E, PCS>>::verify(
+        let perm_check_sub_claim = <Self as PermutationCheck<C, PCS>>::verify(
             &proof.perm_check_proof,
             &perm_check_aux_info,
             &mut transcript,
@@ -516,47 +522,55 @@ where
         let mut comms = vec![];
         let mut points = vec![];
 
-        let perm_check_point_0 = [&[E::Fr::zero()], &perm_check_point[0..num_vars - 1]].concat();
-        let perm_check_point_1 = [&[E::Fr::one()], &perm_check_point[0..num_vars - 1]].concat();
-        let prod_final_query_point =
-            [vec![E::Fr::zero()], vec![E::Fr::one(); num_vars - 1]].concat();
+        let perm_check_point_0 = [
+            &[C::ScalarField::zero()],
+            &perm_check_point[0..num_vars - 1],
+        ]
+        .concat();
+        let perm_check_point_1 =
+            [&[C::ScalarField::one()], &perm_check_point[0..num_vars - 1]].concat();
+        let prod_final_query_point = [
+            vec![C::ScalarField::zero()],
+            vec![C::ScalarField::one(); num_vars - 1],
+        ]
+        .concat();
 
         // prod(x)'s points
-        comms.push(proof.perm_check_proof.prod_x_comm);
-        comms.push(proof.perm_check_proof.prod_x_comm);
-        comms.push(proof.perm_check_proof.prod_x_comm);
-        comms.push(proof.perm_check_proof.prod_x_comm);
+        comms.push(&proof.perm_check_proof.prod_x_comm);
+        comms.push(&proof.perm_check_proof.prod_x_comm);
+        comms.push(&proof.perm_check_proof.prod_x_comm);
+        comms.push(&proof.perm_check_proof.prod_x_comm);
         points.push(perm_check_point.clone());
         points.push(perm_check_point_0.clone());
         points.push(perm_check_point_1.clone());
         points.push(prod_final_query_point);
         // frac(x)'s points
-        comms.push(proof.perm_check_proof.frac_comm);
-        comms.push(proof.perm_check_proof.frac_comm);
-        comms.push(proof.perm_check_proof.frac_comm);
+        comms.push(&proof.perm_check_proof.frac_comm);
+        comms.push(&proof.perm_check_proof.frac_comm);
+        comms.push(&proof.perm_check_proof.frac_comm);
         points.push(perm_check_point.clone());
         points.push(perm_check_point_0);
         points.push(perm_check_point_1);
 
         // perms' points
-        for &pcom in vk.perm_commitments.iter() {
+        for pcom in vk.perm_commitments.iter() {
             comms.push(pcom);
             points.push(perm_check_point.clone());
         }
 
         // witnesses' points
         // TODO: merge points
-        for &wcom in proof.witness_commits.iter() {
+        for wcom in proof.witness_commits.iter() {
             comms.push(wcom);
             points.push(perm_check_point.clone());
         }
-        for &wcom in proof.witness_commits.iter() {
+        for wcom in proof.witness_commits.iter() {
             comms.push(wcom);
             points.push(zero_check_point.clone());
         }
 
         // selector_poly(zero_check_point)
-        for &com in vk.selector_commitments.iter() {
+        for com in vk.selector_commitments.iter() {
             comms.push(com);
             points.push(zero_check_point.clone());
         }
@@ -575,9 +589,9 @@ where
                 pi_eval, expect_pi_eval,
             )));
         }
-        let r_pi_padded = [r_pi, vec![E::Fr::zero(); num_vars - ell]].concat();
+        let r_pi_padded = [r_pi, vec![C::ScalarField::zero(); num_vars - ell]].concat();
 
-        comms.push(proof.witness_commits[0]);
+        comms.push(&proof.witness_commits[0]);
         points.push(r_pi_padded);
         assert_eq!(comms.len(), proof.batch_openings.f_i_eval_at_point_i.len());
         end_timer!(pi_step);
@@ -607,9 +621,9 @@ mod tests {
         witness::WitnessColumn,
     };
     use arithmetic::{identity_permutation, random_permutation};
-    use ark_bls12_381::Bls12_381;
+    use ark_bls12_381::G1Affine as G1;
     use ark_std::test_rng;
-    use subroutines::pcs::prelude::MultilinearKzgPCS;
+    use subroutines::pcs::prelude::MultilinearHyraxPCS;
 
     #[test]
     fn test_hyperplonk_e2e() -> Result<(), HyperPlonkErrors> {
@@ -629,14 +643,14 @@ mod tests {
         let gates = CustomizedGates {
             gates: vec![(1, Some(0), vec![0, 0, 0, 0, 0]), (-1, None, vec![1])],
         };
-        test_hyperplonk_helper::<Bls12_381>(gates)
+        test_hyperplonk_helper::<G1>(gates)
     }
 
-    fn test_hyperplonk_helper<E: PairingEngine>(
+    fn test_hyperplonk_helper<C: AffineCurve>(
         gate_func: CustomizedGates,
     ) -> Result<(), HyperPlonkErrors> {
         let mut rng = test_rng();
-        let pcs_srs = MultilinearKzgPCS::<E>::gen_srs_for_testing(&mut rng, 16)?;
+        let pcs_srs = MultilinearHyraxPCS::<C>::gen_srs_for_testing(&mut rng, 16)?;
 
         let num_constraints = 4;
         let num_pub_input = 4;
@@ -650,7 +664,12 @@ mod tests {
             gate_func,
         };
         let permutation = identity_permutation(nv, num_witnesses);
-        let q1 = SelectorColumn(vec![E::Fr::one(), E::Fr::one(), E::Fr::one(), E::Fr::one()]);
+        let q1 = SelectorColumn(vec![
+            C::ScalarField::one(),
+            C::ScalarField::one(),
+            C::ScalarField::one(),
+            C::ScalarField::one(),
+        ]);
         let index = HyperPlonkIndex {
             params,
             permutation,
@@ -658,48 +677,51 @@ mod tests {
         };
 
         // generate pk and vks
-        let (pk, vk) = <PolyIOP<E::Fr> as HyperPlonkSNARK<E, MultilinearKzgPCS<E>>>::preprocess(
-            &index, &pcs_srs,
-        )?;
+        let (pk, vk) =
+            <PolyIOP<C::ScalarField> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::preprocess(
+                &index, &pcs_srs,
+            )?;
 
         // w1 := [0, 1, 2, 3]
         let w1 = WitnessColumn(vec![
-            E::Fr::zero(),
-            E::Fr::one(),
-            E::Fr::from(2u128),
-            E::Fr::from(3u128),
+            C::ScalarField::zero(),
+            C::ScalarField::one(),
+            C::ScalarField::from(2u128),
+            C::ScalarField::from(3u128),
         ]);
         // w2 := [0^5, 1^5, 2^5, 3^5]
         let w2 = WitnessColumn(vec![
-            E::Fr::zero(),
-            E::Fr::one(),
-            E::Fr::from(32u128),
-            E::Fr::from(243u128),
+            C::ScalarField::zero(),
+            C::ScalarField::one(),
+            C::ScalarField::from(32u128),
+            C::ScalarField::from(243u128),
         ]);
         // public input = w1
         let pi = w1.clone();
 
         // generate a proof and verify
-        let proof = <PolyIOP<E::Fr> as HyperPlonkSNARK<E, MultilinearKzgPCS<E>>>::prove(
+        let proof = <PolyIOP<C::ScalarField> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::prove(
             &pk,
             &pi.0,
             &[w1.clone(), w2.clone()],
         )?;
 
-        let _verify = <PolyIOP<E::Fr> as HyperPlonkSNARK<E, MultilinearKzgPCS<E>>>::verify(
-            &vk, &pi.0, &proof,
-        )?;
+        let _verify =
+            <PolyIOP<C::ScalarField> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::verify(
+                &vk, &pi.0, &proof,
+            )?;
 
         // bad path 1: wrong permutation
-        let rand_perm: Vec<E::Fr> = random_permutation(nv, num_witnesses, &mut rng);
+        let rand_perm: Vec<C::ScalarField> = random_permutation(nv, num_witnesses, &mut rng);
         let mut bad_index = index.clone();
         bad_index.permutation = rand_perm;
         // generate pk and vks
-        let (_, bad_vk) = <PolyIOP<E::Fr> as HyperPlonkSNARK<E, MultilinearKzgPCS<E>>>::preprocess(
-            &bad_index, &pcs_srs,
-        )?;
+        let (_, bad_vk) = <PolyIOP<C::ScalarField> as HyperPlonkSNARK<
+            C,
+            MultilinearHyraxPCS<C>,
+        >>::preprocess(&bad_index, &pcs_srs)?;
         assert_eq!(
-            <PolyIOP<E::Fr> as HyperPlonkSNARK<E, MultilinearKzgPCS<E>>>::verify(
+            <PolyIOP<C::ScalarField> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::verify(
                 &bad_vk, &pi.0, &proof,
             )?,
             false
@@ -707,9 +729,9 @@ mod tests {
 
         // bad path 2: wrong witness
         let mut w1_bad = w1.clone();
-        w1_bad.0[0] = E::Fr::one();
+        w1_bad.0[0] = C::ScalarField::one();
         assert!(
-            <PolyIOP<E::Fr> as HyperPlonkSNARK<E, MultilinearKzgPCS<E>>>::prove(
+            <PolyIOP<C::ScalarField> as HyperPlonkSNARK<C, MultilinearHyraxPCS<C>>>::prove(
                 &pk,
                 &pi.0,
                 &[w1_bad, w2],

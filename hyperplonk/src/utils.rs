@@ -3,17 +3,17 @@ use crate::{
     witness::WitnessColumn,
 };
 use arithmetic::{evaluate_opt, VirtualPolynomial};
-use ark_ec::PairingEngine;
+use ark_ec::AffineCurve;
 use ark_ff::PrimeField;
 use ark_poly::DenseMultilinearExtension;
 use std::{borrow::Borrow, sync::Arc};
-use subroutines::pcs::{prelude::Commitment, PolynomialCommitmentScheme};
+use subroutines::pcs::{prelude::HyraxCommitment, PolynomialCommitmentScheme};
 use transcript::IOPTranscript;
 
 /// An accumulator structure that holds a polynomial and
 /// its opening points
 #[derive(Debug)]
-pub(super) struct PcsAccumulator<E: PairingEngine, PCS: PolynomialCommitmentScheme<E>> {
+pub(super) struct PcsAccumulator<'a, C: AffineCurve, PCS: PolynomialCommitmentScheme<C>> {
     // sequence:
     // - prod(x) at 5 points
     // - w_merged at perm check point
@@ -22,20 +22,19 @@ pub(super) struct PcsAccumulator<E: PairingEngine, PCS: PolynomialCommitmentSche
     // - w[0] at r_pi
     pub(crate) num_var: usize,
     pub(crate) polynomials: Vec<PCS::Polynomial>,
-    pub(crate) commitments: Vec<PCS::Commitment>,
+    pub(crate) commitments: Vec<&'a PCS::Commitment>,
     pub(crate) points: Vec<PCS::Point>,
-    pub(crate) evals: Vec<PCS::Evaluation>,
+    pub(crate) evals: Vec<C::ScalarField>,
 }
 
-impl<E, PCS> PcsAccumulator<E, PCS>
+impl<'a, C, PCS> PcsAccumulator<'a, C, PCS>
 where
-    E: PairingEngine,
+    C: AffineCurve,
     PCS: PolynomialCommitmentScheme<
-        E,
-        Polynomial = Arc<DenseMultilinearExtension<E::Fr>>,
-        Point = Vec<E::Fr>,
-        Evaluation = E::Fr,
-        Commitment = Commitment<E>,
+        C,
+        Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>,
+        Point = Vec<C::ScalarField>,
+        Commitment = HyraxCommitment<C>,
     >,
 {
     /// Create an empty accumulator.
@@ -53,7 +52,7 @@ where
     pub(super) fn insert_poly_and_points(
         &mut self,
         poly: &PCS::Polynomial,
-        commit: &PCS::Commitment,
+        commit: &'a PCS::Commitment,
         point: &PCS::Point,
     ) {
         assert!(poly.num_vars == point.len());
@@ -64,7 +63,7 @@ where
         self.evals.push(eval);
         self.polynomials.push(poly.clone());
         self.points.push(point.clone());
-        self.commitments.push(*commit);
+        self.commitments.push(commit);
     }
 
     /// Batch open all the points over a merged polynomial.
@@ -72,7 +71,7 @@ where
     pub(super) fn multi_open(
         &self,
         prover_param: impl Borrow<PCS::ProverParam>,
-        transcript: &mut IOPTranscript<E::Fr>,
+        transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<PCS::BatchProof, HyperPlonkErrors> {
         Ok(PCS::multi_open(
             prover_param.borrow(),
