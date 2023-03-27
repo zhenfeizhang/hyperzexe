@@ -1,10 +1,7 @@
 #![allow(non_snake_case)]
-use ark_ec::ProjectiveCurve;
-use ark_ec::{msm::VariableBaseMSM, AffineCurve};
+use ark_ec::{msm::VariableBaseMSM, AffineCurve, ProjectiveCurve};
 use ark_ff::PrimeField;
-use ark_serialize::SerializationError;
-use ark_serialize::Write;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError, Write};
 
 use blake2::Blake2s256;
 use digest::Digest;

@@ -406,16 +406,21 @@ where
         }
 
         // Extract evaluations from openings
-        let prod_evals = &proof.batch_openings.f_i_eval_at_point_i[0..4];
-        let frac_evals = &proof.batch_openings.f_i_eval_at_point_i[4..7];
-        let perm_evals = &proof.batch_openings.f_i_eval_at_point_i[7..7 + num_witnesses];
-        let witness_perm_evals =
-            &proof.batch_openings.f_i_eval_at_point_i[7 + num_witnesses..7 + 2 * num_witnesses];
-        let witness_gate_evals =
-            &proof.batch_openings.f_i_eval_at_point_i[7 + 2 * num_witnesses..7 + 3 * num_witnesses];
-        let selector_evals = &proof.batch_openings.f_i_eval_at_point_i
-            [7 + 3 * num_witnesses..7 + 3 * num_witnesses + num_selectors];
-        let pi_eval = proof.batch_openings.f_i_eval_at_point_i.last().unwrap();
+        let prod_eval_vec = proof.batch_openings[0..4].iter().map(|o| o.eval_groups[0][0]).collect::<Vec<_>>();
+        let frac_eval_vec = proof.batch_openings[4..7].iter().map(|o| o.eval_groups[0][0]).collect::<Vec<_>>();
+        let perm_eval_vec = proof.batch_openings[7..7 + num_witnesses].iter().map(|o| o.eval_groups[0][0]).collect::<Vec<_>>();
+        let witness_perm_eval_vec =
+            proof.batch_openings[7 + num_witnesses..7 + 2 * num_witnesses].iter().map(|o| o.eval_groups[0][0]).collect::<Vec<_>>();
+        let witness_gate_eval_vec =
+            proof.batch_openings[7 + 2 * num_witnesses..7 + 3 * num_witnesses].iter().map(|o| o.eval_groups[0][0]).collect::<Vec<_>>();
+        let selector_eval_vec = proof.batch_openings[7 + 3 * num_witnesses..7 + 3 * num_witnesses + num_selectors].iter().map(|o| o.eval_groups[0][0]).collect::<Vec<_>>();
+        let prod_evals = prod_eval_vec.as_slice();
+        let frac_evals = frac_eval_vec.as_slice();
+        let perm_evals = perm_eval_vec.as_slice();
+        let witness_perm_evals = witness_perm_eval_vec.as_slice();
+        let witness_gate_evals = witness_gate_eval_vec.as_slice();
+        let selector_evals = selector_eval_vec.as_slice();
+        let pi_eval = proof.batch_openings.last().unwrap().eval_groups[0][0];
 
         // =======================================================================
         // 1. Verify zero_check_proof on
@@ -583,7 +588,7 @@ where
         let pi_step = start_timer!(|| "check public evaluation");
         let pi_poly = DenseMultilinearExtension::from_evaluations_slice(ell as usize, pub_input);
         let expect_pi_eval = evaluate_opt(&pi_poly, &r_pi[..]);
-        if expect_pi_eval != *pi_eval {
+        if expect_pi_eval != pi_eval {
             return Err(HyperPlonkErrors::InvalidProver(format!(
                 "Public input eval mismatch: got {}, expect {}",
                 pi_eval, expect_pi_eval,
@@ -593,19 +598,22 @@ where
 
         comms.push(&proof.witness_commits[0]);
         points.push(r_pi_padded);
-        assert_eq!(comms.len(), proof.batch_openings.f_i_eval_at_point_i.len());
+        assert_eq!(comms.len(), proof.batch_openings.len());
         end_timer!(pi_step);
 
         end_timer!(step);
         let step = start_timer!(|| "PCS batch verify");
         // check proof
-        let res = PCS::batch_verify(
-            &vk.pcs_param,
-            &comms,
-            &points,
-            &proof.batch_openings,
-            &mut transcript,
-        )?;
+        let mut res = true;
+        for ((comm, point), proof) in comms.into_iter().zip(points.iter()).zip(proof.batch_openings.iter()) {
+            res = res && (PCS::batch_verify(
+                &vk.pcs_param,
+                &[comm.clone()],
+                &[point.to_vec()],
+                proof,
+                &mut transcript,
+            )?);
+        }
 
         end_timer!(step);
         end_timer!(start);
@@ -651,7 +659,7 @@ mod tests {
     ) -> Result<(), HyperPlonkErrors> {
         let mut rng = test_rng();
         let pcs_srs = MultilinearHyraxPCS::<C>::gen_srs_for_testing(&mut rng, 16)?;
-
+        
         let num_constraints = 4;
         let num_pub_input = 4;
         let nv = log2(num_constraints) as usize;

@@ -29,6 +29,8 @@ pub enum PCSError {
     TranscriptError(TranscriptError),
     /// ArithErrors error {0}
     ArithErrors(ArithErrors),
+    /// Not implemented
+    NotImplemented(String),
 }
 
 impl From<SerializationError> for PCSError {

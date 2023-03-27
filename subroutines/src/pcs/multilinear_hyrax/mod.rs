@@ -1,15 +1,16 @@
 //! Main module for multilinear Hyrax commitment scheme (based on implementation
 //! in Spartan)
 #![allow(non_snake_case)]
+
 use self::{
-    batching::BatchProof,
-    dense_mlpoly::{MultilinearHyraxProof, PolyCommitmentBlinds, PolyCommitmentGens},
+    batching::{batch_verify_single_point_internal, BatchProof},
+    dense_mlpoly::{MultilinearHyraxProof, PolyCommitmentBlinds, PolyCommitmentGens}, nizk::DotProductProofGens,
 };
 use crate::{
     pcs::{
         multilinear_hyrax::{
+            batching::multi_open_single_point_internal,
             commitments::{commit_array, commit_element, MultiCommitGens},
-            dense_mlpoly::EqPolynomial,
             math::Math,
             random::RandomTape,
         },
@@ -35,28 +36,32 @@ use ark_std::{
 };
 use transcript::IOPTranscript;
 
+pub(crate) mod batching;
+mod commitments;
+mod dense_mlpoly;
+mod math;
+mod nizk;
+mod random;
+
 /// Hyrax Polynomial Commitment Scheme on multilinear polynomials.
 pub struct MultilinearHyraxPCS<C: AffineCurve> {
     #[doc(hidden)]
     _curve: PhantomData<C>,
 }
 
-pub(crate) mod batching;
-mod commitments;
-pub(crate) mod dense_mlpoly;
-mod math;
-mod nizk;
-mod random;
+pub type HyraxSRS<C> = DotProductProofGens<C>;
+pub type HyraxProverParam<C> = PolyCommitmentGens<C>;
+pub type HyraxVerifierParam<C> = PolyCommitmentGens<C>;
 
 impl<C> PolynomialCommitmentScheme<C> for MultilinearHyraxPCS<C>
 where
     C: AffineCurve,
 {
     // Parameters
-    type ProverParam = PolyCommitmentGens<C>;
-    type VerifierParam = PolyCommitmentGens<C>;
+    type ProverParam = HyraxProverParam<C>;
+    type VerifierParam = HyraxVerifierParam<C>;
     /// Structured reference string
-    type SRS = PolyCommitmentGens<C>;
+    type SRS = HyraxSRS<C>;
     // Polynomial and its associated types
     type Polynomial = Arc<DenseMultilinearExtension<C::ScalarField>>;
     type Point = Vec<C::ScalarField>;
@@ -82,7 +87,8 @@ where
                 "constant polynomial not supported".to_string(),
             ));
         }
-        let res = PolyCommitmentGens::new(log_size, b"new_params")?;
+        let right_num_vars = log_size + 1 >> 1;
+        let res = DotProductProofGens::new(1 << right_num_vars, b"new srs")?;
         end_timer!(timer);
         Ok(res)
     }
@@ -105,8 +111,7 @@ where
                 ))
             },
         };
-        let vp = srs.borrow();
-        let param = vp.trim(supported_num_vars)?;
+        let param = PolyCommitmentGens::new_from_srs(srs.borrow(), supported_num_vars)?;
         end_timer!(timer);
 
         Ok((param.clone(), param))
@@ -125,8 +130,7 @@ where
         let n = poly.num_vars.pow2();
         let ell = poly.num_vars;
 
-        let (left_num_vars, right_num_vars) =
-            EqPolynomial::<C::ScalarField>::compute_factored_lens(ell);
+        let (left_num_vars, right_num_vars) = prover_param.compute_factored_lens(ell);
         let L_size = left_num_vars.pow2();
         let R_size = right_num_vars.pow2();
         assert_eq!(L_size * R_size, n);
@@ -137,6 +141,40 @@ where
         };
 
         let res = Self::commit_inner(poly, &blinds.blinds, &prover_param.gens.gens_n);
+        end_timer!(timer);
+        Ok(res)
+    }
+
+    /// Generate a commitment for polynomials
+    fn multi_commit(
+        prover_param: impl Borrow<Self::ProverParam>,
+        poly: &[Self::Polynomial],
+    ) -> Result<Self::Commitment, PCSError> {
+        let prover_param = prover_param.borrow();
+        let timer = start_timer!(|| "MultilinearHyraxPCS::multi_commit");
+
+        // Concatenate all polynomial evaluations and pad to the next power of 2.
+        let mut poly_evals = Vec::new();
+        for p in poly {
+            poly_evals.extend(&p.evaluations);
+        }
+        poly_evals.extend(vec![
+            C::ScalarField::zero();
+            poly_evals.len().next_power_of_two() - poly_evals.len()
+        ]);
+
+        let num_vars = poly_evals.len().log_2();
+        let poly = DenseMultilinearExtension::from_evaluations_vec(num_vars, poly_evals);
+
+        let (left_num_vars, _) = prover_param.compute_factored_lens(num_vars);
+        let L_size = left_num_vars.pow2();
+
+        // We don't need hiding property here.
+        let blinds: PolyCommitmentBlinds<C> = PolyCommitmentBlinds {
+            blinds: vec![C::ScalarField::zero(); L_size],
+        };
+
+        let res = Self::commit_inner(&poly, &blinds.blinds, &prover_param.gens.gens_n);
         end_timer!(timer);
         Ok(res)
     }
@@ -192,60 +230,56 @@ where
 
     fn multi_open(
         prover_param: impl Borrow<Self::ProverParam>,
-        polynomials: &[Self::Polynomial],
+        polynomials: &[&[Self::Polynomial]],
         points: &[Self::Point],
-        evals: &[C::ScalarField],
+        evals: &[&[C::ScalarField]],
         transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<Self::BatchProof, PCSError> {
         let timer = start_timer!(|| "MultilinearHyraxPCS::multi_open");
-        let mut random_tape = RandomTape::new(b"batch_proof");
-        let mut proofs = Vec::<Self::Proof>::with_capacity(polynomials.len());
-        for (poly, (point, eval)) in polynomials.iter().zip(points.iter().zip(evals.iter())) {
-            proofs.push(MultilinearHyraxProof::prove(
-                poly,
-                None,
-                point,
-                eval,
-                None,
-                &prover_param.borrow(),
-                transcript,
-                &mut random_tape,
-            )?);
+        let prover_param = prover_param.borrow();
+
+        for point in points.iter() {
+            // check whether point[i] == point[0]
+            if *point != points[0] {
+                return Err(PCSError::NotImplemented(String::from(
+                    "Not implemented for different points",
+                )));
+            }
         }
+        let proof = multi_open_single_point_internal(
+            prover_param,
+            polynomials,
+            &points[0],
+            evals,
+            transcript,
+        )?;
+
         end_timer!(timer);
-        Ok(Self::BatchProof {
-            f_i_eval_at_point_i: evals.to_vec(),
-            f_i_proof_at_point_i: proofs,
-        })
+        Ok(proof)
     }
 
     fn batch_verify(
         verifier_param: &Self::VerifierParam,
-        commitments: &[&Self::Commitment],
+        commitments: &[Self::Commitment],
         points: &[Self::Point],
         batch_proof: &Self::BatchProof,
         transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<bool, PCSError> {
-        for (comm, (point, (eval, proof))) in commitments.iter().zip(
-            points.iter().zip(
-                batch_proof
-                    .f_i_eval_at_point_i
-                    .iter()
-                    .zip(batch_proof.f_i_proof_at_point_i.iter()),
-            ),
-        ) {
-            if !(Self::verify(
-                verifier_param.borrow(),
-                comm,
-                point,
-                eval,
-                proof,
-                transcript,
-            )?) {
-                return Ok(false);
+        for point in points.iter() {
+            // check whether point[i] == point[0]
+            if *point != points[0] {
+                return Err(PCSError::NotImplemented(String::from(
+                    "Not implemented for different points",
+                )));
             }
         }
-        Ok(true)
+        batch_verify_single_point_internal(
+            verifier_param,
+            commitments,
+            &points[0],
+            batch_proof,
+            transcript,
+        )
     }
 }
 
@@ -258,10 +292,7 @@ impl<C: AffineCurve> MultilinearHyraxPCS<C> {
     ) -> HyraxCommitment<C> {
         use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-        let (left_num_vars, right_num_vars) =
-            EqPolynomial::<C::ScalarField>::compute_factored_lens(poly.num_vars);
-        let L_size = left_num_vars.pow2();
-        let R_size = right_num_vars.pow2();
+        let (L_size, R_size) = (blinds.len(), gens.n);
         let comm = C::Projective::batch_normalization_into_affine(
             (0..L_size)
                 .into_par_iter()
@@ -315,7 +346,7 @@ mod tests {
     type F = <C as AffineCurve>::ScalarField;
 
     fn test_single_helper<R: RngCore + CryptoRng>(
-        params: &PolyCommitmentGens<C>,
+        params: &DotProductProofGens<C>,
         poly: &Arc<DenseMultilinearExtension<F>>,
         rng: &mut R,
     ) -> Result<(), PCSError> {
@@ -354,15 +385,15 @@ mod tests {
     fn test_single_commit() -> Result<(), PCSError> {
         let mut rng = test_rng();
 
-        let params = MultilinearHyraxPCS::<C>::gen_srs_for_testing(&mut rng, 10)?;
+        let srs = MultilinearHyraxPCS::<C>::gen_srs_for_testing(&mut rng, 10)?;
 
         // normal polynomials
         let poly1 = Arc::new(DenseMultilinearExtension::rand(8, &mut rng));
-        test_single_helper(&params, &poly1, &mut rng)?;
+        test_single_helper(&srs, &poly1, &mut rng)?;
 
         // single-variate polynomials
         let poly2 = Arc::new(DenseMultilinearExtension::rand(1, &mut rng));
-        test_single_helper(&params, &poly2, &mut rng)?;
+        test_single_helper(&srs, &poly2, &mut rng)?;
 
         Ok(())
     }

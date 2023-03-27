@@ -74,6 +74,13 @@ pub trait PolynomialCommitmentScheme<C: AffineCurve> {
         poly: &Self::Polynomial,
     ) -> Result<Self::Commitment, PCSError>;
 
+    /// Generate a commitment for polynomials
+    /// ## Note on function signature
+    fn multi_commit(
+        prover_param: impl Borrow<Self::ProverParam>,
+        poly: &[Self::Polynomial],
+    ) -> Result<Self::Commitment, PCSError>;
+
     /// On input a polynomial `p` and a point `point`, outputs a proof for the
     /// same.
     fn open(
@@ -87,9 +94,9 @@ pub trait PolynomialCommitmentScheme<C: AffineCurve> {
     /// a transcript, compute a multi-opening for all the polynomials.
     fn multi_open(
         prover_param: impl Borrow<Self::ProverParam>,
-        polynomials: &[Self::Polynomial],
+        polynomials: &[&[Self::Polynomial]],
         points: &[Self::Point],
-        evals: &[C::ScalarField],
+        evals: &[&[C::ScalarField]],
         transcript: &mut IOPTranscript<C::ScalarField>,
     ) -> Result<Self::BatchProof, PCSError>;
 
@@ -108,7 +115,7 @@ pub trait PolynomialCommitmentScheme<C: AffineCurve> {
     /// `poly_i` committed inside `comm`.
     fn batch_verify(
         verifier_param: &Self::VerifierParam,
-        commitments: &[&Self::Commitment],
+        commitments: &[Self::Commitment],
         points: &[Self::Point],
         batch_proof: &Self::BatchProof,
         transcript: &mut IOPTranscript<C::ScalarField>,
