@@ -6,53 +6,38 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+sha3 = "0.10.6"
+num-bigint = "0.4.3"
+num-integer = "0.1.45"
+itertools = "0.10.5"
+displaydoc = { version = "0.2.3", default-features = false }
+rand = "0.8"
+merlin = "2.0.0"
 
 ark-std = { version = "^0.3.0", default-features = false }
-ark-ec = { version = "^0.3.0", default-features = false }
-ark-ff = { version = "^0.3.0", default-features = false }
-ark-poly = { version = "^0.3.0", default-features = false }
-ark-serialize = { version = "^0.3.0", default-features = false, features = [ "derive" ] }
-
-displaydoc = { version = "0.2.3", default-features = false }
-
-subroutines = { path = "../subroutines" }
-transcript = { path = "../transcript" }
-arithmetic = { path = "../arithmetic" }
-util = { path = "../util" }
+ark-serialize =  { version = "^0.3.0", default-features = false }
 
 rayon = { version = "1.5.2", default-features = false, optional = true }
 
+halo2_curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", tag = "0.3.0", package = "halo2curves" }
+halo2_proofs = { git = "https://github.com/han0110/halo2.git", branch = "feature/for-benchmark", optional = true }
+
 [dev-dependencies]
-ark-bls12-381 = { version = "0.3.0", default-features = false, features = [ "curve" ] }
+paste = "1.0.11"
+
 # Benchmarks
 [[bench]]
-name = "hyperplonk-benches"
-path = "benches/bench.rs"
+name = "pcs-benches"
+path = "benches/pcs_bench.rs"
 harness = false
 
 [features]
 # default = [ ]
 # default = [ "parallel" ]
 # default = [ "parallel", "print-trace" ]
-default = [ "parallel",  "extensive_sanity_checks" ]
+default = [ "parallel"]
 bench = [ "parallel" ]
-# extensive sanity checks that are useful for debugging
-extensive_sanity_checks = [
-    "subroutines/extensive_sanity_checks",
- ]
+
 parallel = [ 
     "rayon",
-    "ark-std/parallel", 
-    "ark-ff/parallel",  
-    "ark-poly/parallel", 
-    "ark-ec/parallel",
-
-    "arithmetic/parallel",
-    "subroutines/parallel",
-    "util/parallel"
     ]
-print-trace = [ 
-    "ark-std/print-trace",
-    "arithmetic/print-trace",
-    "subroutines/print-trace"
-    ] 
