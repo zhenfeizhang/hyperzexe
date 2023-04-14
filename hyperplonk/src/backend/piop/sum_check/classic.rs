@@ -47,13 +47,13 @@ impl<'a, F: PrimeField> ProverState<'a, F> {
         assert!(num_vars > 0 && virtual_poly.expression.max_used_rotation_distance() <= num_vars);
         let bh = BooleanHypercube::new(num_vars);
         let lagranges = {
-            let bh = bh.iter().collect_vec();
+            // let bh = bh.iter().collect_vec();
             virtual_poly
                 .expression
                 .used_langrange()
                 .into_iter()
                 .map(|i| {
-                    let b = bh[i.rem_euclid(1 << num_vars) as usize];
+                    let b = i.rem_euclid(1 << num_vars as i32) as usize;
                     (i, (b, F::one()))
                 })
                 .collect()
