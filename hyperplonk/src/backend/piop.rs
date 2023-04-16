@@ -371,7 +371,7 @@ where
         ];
         let poly_groups = reorder_into_groups(polys, &segment_groups);
 
-        let mut eval_flatten = vec![F::zero(); p1_p2_offset + p1_p2_polys.len()];
+        let mut eval_flatten = vec![F::zero(); p1_p2_offset];
         for ev in evals {
             eval_flatten[ev.poly()] = *ev.value();
         }

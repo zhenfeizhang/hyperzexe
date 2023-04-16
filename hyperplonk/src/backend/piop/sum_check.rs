@@ -3,7 +3,7 @@ use halo2_curves::group::ff::{Field, PrimeField};
 use crate::backend::{
     poly::multilinear::MultilinearPolynomial,
     util::{
-        arithmetic::{inner_product, powers, product, BooleanHypercube},
+        arithmetic::{inner_product, powers, product},
         expression::{CommonPolynomial, Expression, Query},
         transcript::FieldTranscriptWrite,
         BitIndex, Itertools,

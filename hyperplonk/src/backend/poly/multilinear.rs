@@ -617,14 +617,14 @@ macro_rules! zip_self {
 pub(crate) use zip_self;
 
 macro_rules! arc_mpoly {
-    ($F:ty, $($elem:expr),* $(,)?) => {
-        Arc::new(MultilinearPolynomial::new(vec![$(F::from($elem as u64)),*]))
+    ($fd:ident, $($elem:expr),* $(,)?) => {
+        Arc::new(MultilinearPolynomial::new(vec![$($fd::from($elem as u64)),*]))
     };
 }
 
 macro_rules! mpoly {
-    ($F:ty, $($elem:expr),* $(,)?) => {
-        MultilinearPolynomial::<F>::new(vec![$(F::from($elem as u64)),*])
+    ($fd:ident, $($elem:expr),* $(,)?) => {
+        MultilinearPolynomial::<F>::new(vec![$($fd::from($elem as u64)),*])
     };
 }
 

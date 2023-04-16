@@ -58,12 +58,10 @@ where
     let eta = transcript.squeeze_challenge();
     let mut poly_evals = vec![C::Scalar::zero(); 1 << max_num_vars];
     for group in polynomials.iter() {
-        if group.len() == 0 {
-            continue;
-        }
+        poly_evals.iter_mut().for_each(|e| *e = *e * eta);
         let evs: Vec<C::Scalar> = group.iter().flat_map(|p| p.evals().to_vec()).collect();
         for (i, ev) in evs.iter().enumerate() {
-            poly_evals[i] = poly_evals[i] * eta + ev;
+            poly_evals[i] = poly_evals[i] + ev;
         }
     }
     // generate new point
@@ -130,11 +128,9 @@ where
         let (left_num_vars, _) = verifier_param.compute_factored_lens(max_num_vars);
         let mut combined_comm: Vec<C::CurveExt> = vec![C::identity().into(); 1 << left_num_vars];
         for f_i in f_i_commitments.iter() {
-            if f_i.len() == 0 {
-                continue;
-            }
+            combined_comm.iter_mut().for_each(|c| *c = *c * eta);
             for (i, c) in f_i.iter().enumerate() {
-                combined_comm[i] = combined_comm[i] * eta + c;
+                combined_comm[i] = combined_comm[i] + c;
             }
         }
         let mut commitment = vec![C::identity(); combined_comm.len()];
@@ -160,38 +156,28 @@ where
 
 #[cfg(test)]
 mod tests {
-    use halo2_curves::bn256::{Fr, G1Affine as C};
+    use halo2_curves::bn256::{Fr as F, G1Affine as C};
     use itertools::Itertools;
-    use rand::RngCore;
 
     use super::*;
     use crate::backend::{
         pcs::{multilinear_hyrax::nizk::DotProductProofGens, prelude::MultilinearHyraxPCS},
         util::{
             test::std_rng,
-            transcript::{FieldTranscriptWrite, Keccak256Transcript},
-        },
+            transcript::Keccak256Transcript,
+        }, poly::multilinear::arc_mpoly,
     };
 
     fn test_multi_open_helper(
         srs: &DotProductProofGens<C>,
-        poly_groups: &[&[Arc<MultilinearPolynomial<Fr>>]],
-        mut rng: impl RngCore,
+        poly_groups: &[&[Arc<MultilinearPolynomial<F>>]],
+        point: &Vec<F>,
+        evals: &[&[F]],
     ) -> Result<(), Error> {
         let num_vars = poly_groups[0][0].num_vars();
         let max_num_batches = poly_groups.iter().map(|g| g.len()).max().unwrap();
         let (ml_ck, ml_vk) =
             MultilinearHyraxPCS::<C>::trim(srs, None, Some(num_vars), max_num_batches)?;
-
-        let point = (0..num_vars)
-            .map(|_| Fr::random(&mut rng))
-            .collect::<Vec<Fr>>();
-
-        let evals: Vec<_> = poly_groups
-            .iter()
-            .map(|f| f.iter().map(|f| f.evaluate(&point)).collect::<Vec<_>>())
-            .collect();
-        let eval_slice = evals.iter().map(|e| e.as_slice()).collect::<Vec<_>>();
 
         let commitments: Vec<_> = poly_groups
             .iter()
@@ -199,39 +185,35 @@ mod tests {
             .collect();
 
         let mut transcript = Keccak256Transcript::<Vec<u8>>::default();
-        transcript.write_field_element(&Fr::zero())?;
-
         let mut batch_proof = multi_open_single_point_internal::<C, MultilinearHyraxPCS<C>>(
             &ml_ck,
             poly_groups,
-            &point,
-            eval_slice.as_slice(),
+            point,
+            evals,
             &mut transcript,
         )?;
 
         // good path
         let commitment_slice = commitments.iter().collect_vec();
         let mut transcript = Keccak256Transcript::<Vec<u8>>::default();
-        transcript.write_field_element(&Fr::zero())?;
         assert!(batch_verify_single_point_internal(
             &ml_vk,
             commitment_slice.as_slice(),
-            &point,
+            point,
             &batch_proof,
             &mut transcript
         )?);
 
         // bad path
-        let mut wrong_evals = evals.clone();
-        wrong_evals[0][0] = wrong_evals[0][0] + Fr::one();
+        let mut wrong_evals = evals.iter().map(|eval| eval.to_vec()).collect_vec();
+        wrong_evals[0][0] = wrong_evals[0][0] + F::one();
         batch_proof.eval_groups = wrong_evals;
 
         let mut transcript = Keccak256Transcript::<Vec<u8>>::default();
-        transcript.write_field_element(&Fr::zero())?;
         assert!(!batch_verify_single_point_internal(
             &ml_vk,
             commitment_slice.as_slice(),
-            &point,
+            point,
             &batch_proof,
             &mut transcript
         )?);
@@ -244,17 +226,18 @@ mod tests {
         let mut rng = std_rng();
         let srs = MultilinearHyraxPCS::<C>::setup(&mut rng, 20)?;
 
-        for num_poly in 3..4 {
-            for nv in 10..12 {
-                let polys1: Vec<_> = (0..num_poly)
-                    .map(|_| Arc::new(MultilinearPolynomial::rand(nv, &mut rng)))
-                    .collect();
-                let half = polys1.len() / 3;
-                let poly_groups = polys1.split_at(half);
+        let poly_group1 = vec![
+            arc_mpoly!(F, 2, 8, 3, 5, 4, 7, 9, 10),
+            arc_mpoly!(F, 1, 2, 2, 3, 7, 9, 1, 9),
+        ];
+        let poly_group2 = vec![
+            arc_mpoly!(F, 1, 4, 1, 5, 5, 7, 3, 10),
+        ];
 
-                test_multi_open_helper(&srs, &[poly_groups.0, poly_groups.1], &mut rng)?;
-            }
-        }
+        let evals = vec![vec![F::from(12078u64), F::from(31649u64)], vec![F::from(22138u64)]];
+        let eval_slices = evals.iter().map(|e| e.as_slice()).collect::<Vec<_>>();
+        let point = vec![F::from(11u64), F::from(17u64), F::from(31u64)];
+        test_multi_open_helper(&srs, &[&poly_group1, &poly_group2], &point, &eval_slices)?;
 
         Ok(())
     }

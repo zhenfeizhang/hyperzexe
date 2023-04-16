@@ -96,8 +96,8 @@ pub(super) fn compute_product_poly<F: PrimeField>(
             // times
             //
             // `prod(x_1, ..., x_n) :=
-            //      [(1 - xn) * frac(0, x1, ..., x(n-1)) + xn * prod(0, x1, ..., x(n-1))] *
-            //      [(1 - xn) * frac(1, x1, ..., x(n-1)) + xn * prod(1, x1, ..., x(n-1))]`
+            //      p1 = [(1 - xn) * frac(0, x1, ..., x(n-1)) + xn * prod(0, x1, ..., x(n-1))] *
+            //      p2 = [(1 - xn) * frac(1, x1, ..., x(n-1)) + xn * prod(1, x1, ..., x(n-1))]`
             //
             // At any given step, the right hand side of the equation
             // is available via either frac_x or the current view of prod_x
@@ -135,13 +135,13 @@ pub(super) fn compute_product_poly<F: PrimeField>(
 /// Compute p1(x) and p2(x) such that
 /// p1(x_1, .., x_n) = (1 - x_n) * frac(0, x_1, ..., x_(n-1))
 ///                  + x_n * prod(0, x_1, ..., x_(n - 1))
-///                  = sum_y ((1 - x_n) * eq((0, x_1, ..., x_(n-1)), y) *
-/// frac(y)                            + x_n * eq((0, x_1, ..., x_(n-1)), y) *
-/// prod(y)) p2(x_1, .., x_n) = (1 - x_n) * frac(1, x_1, ..., x_(n-1))
+///                  = sum_y ((1 - x_n) * eq((0, x_1, ..., x_(n-1)), y) * frac(0, x_1, ..., x_(n - 1))
+///                              + x_n * eq((0, x_1, ..., x_(n-1)), y) * prod(0, x_1, ..., x_(n - 1))
+/// p2(x_1, .., x_n) = (1 - x_n) * frac(1, x_1, ..., x_(n-1))
 ///                  + x_n * prod(1, x_1, ..., x_(n - 1))
-///                  = sum_y ((1 - x_n) * eq((1, x_1, ..., x_(n-1)), y) *
-/// frac(y)                            + x_n * eq((1, x_1, ..., x_(n-1)), y) *
-/// prod(y))
+///                  = sum_y ((1 - x_n) * eq((1, x_1, ..., x_(n-1)), y) * frac(1, x_1, ..., x_(n - 1))
+///                             + x_n * eq((1, x_1, ..., x_(n-1)), y) * prod(1, x_1, ..., x_(n - 1))
+/// 
 pub(super) fn compute_p1_p2_poly<F: PrimeField>(
     frac_poly: &MultilinearPolynomial<F>,
     prod_poly: &MultilinearPolynomial<F>,
