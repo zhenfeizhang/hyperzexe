@@ -332,7 +332,7 @@ where
         let timer = start_timer(|| format!("sum_check-for-pc-openings"));
         let random_combined_eval = intermediate_evals[preprocess_offset..]
             .iter()
-            .fold(F::zero(), |acc, e| acc + eta * e);
+            .fold(F::zero(), |acc, e| acc * eta + e);
 
         let (opening_sum_check_msgs, points, evals) = prove_sum_check(
             pp.num_instances.len(),
@@ -478,7 +478,7 @@ where
         let random_combined_eval = proof
             .intermediate_evals[instances.len()..]
             .iter()
-            .fold(F::zero(), |acc, e| acc + eta * e);
+            .fold(F::zero(), |acc, e| acc * eta + e);
         let points = verify_sum_check(
             vp.num_vars,
             &vp.open_expression,
