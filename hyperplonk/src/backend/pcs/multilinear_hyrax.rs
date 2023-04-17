@@ -70,14 +70,15 @@ impl<C: CurveAffine> PolynomialCommitmentScheme<C::Scalar> for MultilinearHyraxP
     ///
     /// WARNING: THIS FUNCTION IS FOR TESTING PURPOSE ONLY.
     /// THE OUTPUT SRS SHOULD NOT BE USED IN PRODUCTION.
-    fn setup(_rng: impl RngCore, log_size: usize) -> Result<Self::SRS, Error> {
-        let timer = start_timer(|| "MultilinearHyraxPCS::gen_srs_for_testing");
-        if log_size == 0 {
+    fn setup(_rng: impl RngCore, size: usize) -> Result<Self::SRS, Error> {
+        if size == 0 {
             return Err(Error::InvalidPcsParam(
                 "constant polynomial not supported".to_string(),
             ));
         }
-        let right_num_vars = log_size + 1 >> 1;
+        let log_size = size.log_2();
+        let timer = start_timer(|| "MultilinearHyraxPCS::gen_srs_for_testing");
+        let right_num_vars = log_size - 1;
         let res = DotProductProofGens::new(1 << right_num_vars, b"new srs")?;
         end_timer(timer);
         Ok(res)
