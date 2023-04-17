@@ -1,6 +1,6 @@
 use crate::backend::{
     piop::{
-        preprocess::{compose, permutation_polys},
+        preprocess::{compose},
         prover::instances_polys,
     },
     poly::multilinear::MultilinearPolynomial,

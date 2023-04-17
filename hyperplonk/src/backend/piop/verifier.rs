@@ -1,12 +1,11 @@
 use halo2_curves::group::ff::PrimeField;
 
 use crate::backend::{
-    pcs::Evaluation,
     piop::sum_check::{
         classic::{ClassicSumCheck, EvaluationsProver},
         evaluate, lagrange_eval, SumCheck,
     },
-    poly::multilinear::{rotation_eval, rotation_eval_points},
+    poly::multilinear::rotation_eval_points,
     util::{
         arithmetic::{inner_product, BooleanHypercube},
         expression::{Expression, Query, Rotation},
@@ -28,7 +27,7 @@ pub(super) fn verify_sum_check<F: PrimeField>(
     sum: F,
     evals: &[F],
     transcript: &mut impl FieldTranscriptWrite<F>,
-) -> Result<(Vec<Vec<F>>, Vec<Evaluation<F>>), Error> {
+) -> Result<Vec<Vec<F>>, Error> {
     let (x_eval, x) = ClassicSumCheck::<EvaluationsProver<_, true>>::verify(
         &(),
         sum_check_msgs,
@@ -38,46 +37,20 @@ pub(super) fn verify_sum_check<F: PrimeField>(
         transcript,
     )?;
 
-    let mut evals = evals.to_vec();
-    let mut read_field_elements = |n| {
-        let res = evals.drain(0..n).collect_vec();
-        transcript.write_field_elements(res.iter())?;
-        Ok(res)
-    };
+    let evals: HashMap<Query, F> = evals.iter().enumerate().map(|(i, e)| (Query::new(i, Rotation::cur()), *e)).collect();
 
     let pcs_query = pcs_query(expression, instances.len());
-    let (evals_for_rotation, evals) = pcs_query
-        .iter()
-        .map(|query| {
-            let evals_for_rotation = read_field_elements(1 << query.rotation().distance())?;
-            let eval = rotation_eval(&x, query.rotation(), &evals_for_rotation);
-            Ok((evals_for_rotation, (*query, eval)))
-        })
-        .try_collect::<_, Vec<_>, _>()?
-        .into_iter()
-        .unzip::<_, _, Vec<_>, Vec<_>>();
-
     let evals = instance_evals(num_vars, expression, instances, &x)
         .into_iter()
         .chain(evals)
         .collect();
+    // println!("evals: {:?}", evals);
     if evaluate(expression, num_vars, &evals, challenges, &[y], &x) != x_eval {
         return Err(Error::InvalidSnark(
             "Unmatched between sum_check output and query evaluation".to_string(),
         ));
     }
-
-    let point_offset = point_offset(&pcs_query);
-    let evals = pcs_query
-        .iter()
-        .zip(evals_for_rotation)
-        .flat_map(|(query, evals_for_rotation)| {
-            (point_offset[&query.rotation()]..)
-                .zip(evals_for_rotation)
-                .map(|(point, eval)| Evaluation::new(query.poly(), point, eval))
-        })
-        .collect();
-    Ok((points(&pcs_query, &x), evals))
+    Ok(points(&pcs_query, &x))
 }
 
 fn instance_evals<F: PrimeField>(

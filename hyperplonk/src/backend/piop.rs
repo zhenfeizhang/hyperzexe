@@ -311,23 +311,18 @@ where
 
         println!("Round n+2: sum_check-for-constraints");
         let timer = start_timer(|| format!("sum_check-for-constraints"));
-        let (constraint_sum_check_msgs, points, intermediate_evals) = {
-            let (sum_check_proof, points, evals) = prove_sum_check(
-                pp.num_instances.len(),
-                &pp.constraint_expression,
-                polys.as_slice(),
-                challenges.as_slice(),
-                y,
-                F::zero(),
-                transcript,
-            )?;
-            (
-                sum_check_proof,
-                points,
-                evals.into_iter().map(|e| *e.value()).collect_vec(),
-            )
-        };
+        let (constraint_sum_check_msgs, points, intermediate_evals) = prove_sum_check(
+            pp.num_instances.len(),
+            &pp.constraint_expression,
+            polys.as_slice(),
+            challenges.as_slice(),
+            y,
+            F::zero(),
+            transcript,
+        )?;
         end_timer(timer);
+
+        transcript.write_field_elements(&intermediate_evals)?;
 
         // Round n + 2 + num_vars
         let eta = transcript.squeeze_challenge();
@@ -339,19 +334,17 @@ where
             .iter()
             .fold(F::zero(), |acc, e| acc + eta * e);
 
-        let (opening_sum_check_msgs, points, evals) = {
-            let (sum_check_proof, points, evals) = prove_sum_check(
-                pp.num_instances.len(),
-                &pp.opening_expression,
-                &polys[0..p1_p2_offset],
-                challenges.as_slice(),
-                points[0].clone(),
-                random_combined_eval,
-                transcript,
-            )?;
-            (sum_check_proof, points, evals)
-        };
+        let (opening_sum_check_msgs, points, evals) = prove_sum_check(
+            pp.num_instances.len(),
+            &pp.opening_expression,
+            &polys[0..p1_p2_offset],
+            challenges.as_slice(),
+            points[0].clone(),
+            random_combined_eval,
+            transcript,
+        )?;
         end_timer(timer);
+        transcript.write_field_elements(&evals[preprocess_offset..])?;
 
         // PCS open: reorder the polynomials and evaluations to match the order of the
         // commitments.
@@ -369,13 +362,11 @@ where
                 (permutation_prod_offset, permutation_prod_polys.len()),
             ],
         ];
-        let poly_groups = reorder_into_groups(polys, &segment_groups);
 
-        let mut eval_flatten = vec![F::zero(); p1_p2_offset];
-        for ev in evals {
-            eval_flatten[ev.poly()] = *ev.value();
-        }
-        let eval_groups = reorder_into_groups(eval_flatten, &segment_groups);
+        // println!("poly_groups: {:?}", polys.iter().map(|g| g.evaluate(&points[0])).enumerate().collect_vec());
+        // println!("eval_groups: {:?}", evals.iter().enumerate().collect_vec());
+        let poly_groups = reorder_into_groups(polys, &segment_groups);
+        let eval_groups = reorder_into_groups(evals, &segment_groups);
 
         let poly_group_slices = poly_groups
             .iter()
@@ -392,6 +383,7 @@ where
             eval_group_slices.as_slice(),
             transcript,
         )?;
+
         end_timer(timer);
 
         Ok(HyperPlonkProof {
@@ -458,12 +450,14 @@ where
             transcript,
         )?;
 
+        transcript.write_field_elements(&proof.intermediate_evals)?;
+
         // Round n + 2 + num_vars
         let eta = transcript.squeeze_challenge();
-
         challenges.push(eta);
 
         let evals = [
+            vec![F::zero(); instances.len()],
             // preprocess polys
             proof.batch_proof.eval_groups[0][0..vp.num_preprocess].to_vec(),
             // witness polys
@@ -482,7 +476,7 @@ where
             .map(|v| v.as_slice())
             .collect_vec();
         let random_combined_eval = proof
-            .intermediate_evals
+            .intermediate_evals[instances.len()..]
             .iter()
             .fold(F::zero(), |acc, e| acc + eta * e);
         let points = verify_sum_check(
@@ -491,11 +485,12 @@ where
             instances,
             msg_slices.as_slice(),
             &challenges,
-            points.0[0].as_slice(),
+            points[0].as_slice(),
             random_combined_eval,
             evals.as_slice(),
             transcript,
         )?;
+        transcript.write_field_elements(&evals[instances.len()..])?;
 
         // PCS verify
         let comms = iter::empty()
@@ -504,7 +499,7 @@ where
             .chain(iter::once(&proof.lookup_count_comm))
             .chain(iter::once(&proof.lookup_perm_intermediate_comm))
             .collect_vec();
-        Pcs::batch_verify(&vp.pcs, &comms, &points.0, &proof.batch_proof, transcript)?;
+        Pcs::batch_verify(&vp.pcs, &comms, &points, &proof.batch_proof, transcript)?;
 
         Ok(())
     }

@@ -1,20 +1,17 @@
 use halo2_curves::group::ff::Field;
 
 use crate::backend::{
-    pcs::Evaluation,
     piop::{
         sum_check::{
             classic::{ClassicSumCheck, EvaluationsProver},
             SumCheck, VirtualPolynomial,
         },
-        verifier::{pcs_query, point_offset, points},
+        verifier::{pcs_query, points},
     },
     poly::multilinear::MultilinearPolynomial,
     util::{
         arithmetic::{BooleanHypercube, PrimeField},
-        end_timer,
-        expression::{Expression, Rotation},
-        start_timer,
+        expression::Expression,
         transcript::FieldTranscriptWrite,
         Itertools,
     },
@@ -49,7 +46,7 @@ pub(super) fn prove_sum_check<F: PrimeField>(
     y: Vec<F>,
     sum: F,
     transcript: &mut impl FieldTranscriptWrite<F>,
-) -> Result<(Vec<Vec<F>>, Vec<Vec<F>>, Vec<Evaluation<F>>), Error> {
+) -> Result<(Vec<Vec<F>>, Vec<Vec<F>>, Vec<F>), Error> {
     if polys.is_empty() {
         return Ok((vec![], vec![], vec![]));
     }
@@ -66,24 +63,6 @@ pub(super) fn prove_sum_check<F: PrimeField>(
     )?;
 
     let pcs_query = pcs_query(expression, num_instance_poly);
-    let point_offset = point_offset(&pcs_query);
-
-    let timer = start_timer(|| format!("evals-{}", pcs_query.len()));
-    let evals = pcs_query
-        .iter()
-        .flat_map(|query| {
-            (point_offset[&query.rotation()]..)
-                .zip(if query.rotation() == Rotation::cur() {
-                    vec![evals[query.poly()]]
-                } else {
-                    polys[query.poly()].evaluate_for_rotation(&x, query.rotation())
-                })
-                .map(|(point, eval)| Evaluation::new(query.poly(), point, eval))
-        })
-        .collect_vec();
-    end_timer(timer);
-
-    transcript.write_field_elements(evals.iter().map(Evaluation::value))?;
     Ok((sum_check_proof, points(&pcs_query, &x), evals))
 }
 
