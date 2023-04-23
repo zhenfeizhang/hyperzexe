@@ -141,6 +141,7 @@ impl<C: CurveAffine> DotProductProofLog<C> {
         // equation. This can be proved by ZKP for discrete-log identity.
         let z1 = d + c * y_hat;
         let z2 = b_hat * (c * blind_hat + blind_Ghat_d) + blind_Qd;
+        transcript.write_field_elements(&[z1, z2])?;
         Ok((
             DotProductProofLog {
                 bullet_reduction_proof,
@@ -177,6 +178,7 @@ impl<C: CurveAffine> DotProductProofLog<C> {
         )?;
         transcript.write_commitment(&self.Qd)?;
         transcript.write_commitment(&self.Ghat_d)?;
+        transcript.write_field_elements(&[self.z1, self.z2])?;
 
         let c = transcript.squeeze_challenge();
 
