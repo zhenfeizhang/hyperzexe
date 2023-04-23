@@ -1,5 +1,4 @@
-use crate::halo2_verifier::halo2_proofs::circuit;
-use crate::halo2_verifier::{util::arithmetic::CurveAffine, Protocol};
+use crate::halo2_verifier::{halo2_proofs::circuit, util::arithmetic::CurveAffine, Protocol};
 use std::rc::Rc;
 
 pub(crate) mod loader;
@@ -11,8 +10,6 @@ pub(crate) mod test;
 pub use loader::{EcPoint, Halo2Loader, Scalar};
 pub use shim::{Context, EccInstructions, IntegerInstructions};
 pub use util::Valuetools;
-
-pub use halo2_ecc;
 
 mod util {
     use crate::halo2_verifier::halo2_proofs::circuit::Value;
@@ -46,9 +43,11 @@ where
             .map(|preprocessed| loader.assign_ec_point(circuit::Value::known(*preprocessed)))
             .collect();
         let transcript_initial_state =
-            self.transcript_initial_state.as_ref().map(|transcript_initial_state| {
-                loader.assign_scalar(circuit::Value::known(*transcript_initial_state))
-            });
+            self.transcript_initial_state
+                .as_ref()
+                .map(|transcript_initial_state| {
+                    loader.assign_scalar(circuit::Value::known(*transcript_initial_state))
+                });
         Protocol {
             domain: self.domain.clone(),
             preprocessed,

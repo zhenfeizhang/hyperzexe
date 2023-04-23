@@ -1,7 +1,7 @@
 //! Main module for the HyperPlonk SNARK.
 
-mod backend;
-mod frontend;
+pub mod backend;
+pub mod frontend;
 pub use halo2_curves;
 
 #[derive(Clone, Debug, PartialEq)]

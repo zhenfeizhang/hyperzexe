@@ -1,7 +1,7 @@
 use halo2_proofs::curves::CurveAffine;
 use std::fmt::Debug;
 
-use crate::{hyperplonk_verifier::Protocol, halo2_verifier::util::transcript::TranscriptRead};
+use crate::{halo2_verifier::util::transcript::TranscriptRead, hyperplonk_verifier::Protocol};
 
 mod hyperplonk;
 
@@ -13,7 +13,7 @@ where
     type Proof: Clone + Debug;
 
     fn read_proof<T>(
-        svk: &PCS::SuccinctVerifyingKey,
+        vk: &PCS::VerifyingKey,
         protocol: &Protocol<C, L>,
         instances: &[Vec<L::LoadedScalar>],
         transcript: &mut T,
@@ -22,7 +22,7 @@ where
         T: TranscriptRead<C, L>;
 
     fn verify(
-        svk: &PCS::SuccinctVerifyingKey,
+        vk: &PCS::VerifyingKey,
         protocol: &Protocol<C, L>,
         instances: &[Vec<L::LoadedScalar>],
         proof: &Self::Proof,

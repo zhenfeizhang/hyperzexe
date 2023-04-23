@@ -1,5 +1,5 @@
-use crate::halo2_verifier::halo2_proofs;
 use crate::halo2_verifier::{
+    halo2_proofs,
     loader::{
         halo2::{EcPoint, EccInstructions, Halo2Loader, Scalar},
         native::{self, NativeLoader},
@@ -13,9 +13,9 @@ use crate::halo2_verifier::{
     },
     Error,
 };
-use halo2_proofs::curves::serde::SerdeObject;
-use halo2_proofs::ff::FromUniformBytes;
-use halo2_proofs::{circuit::Value, transcript::EncodedChallenge};
+use halo2_proofs::{
+    circuit::Value, curves::serde::SerdeObject, ff::FromUniformBytes, transcript::EncodedChallenge,
+};
 use std::{
     io::{self, Read, Write},
     rc::Rc,
@@ -60,7 +60,11 @@ where
 {
     pub fn new(loader: &Rc<Halo2Loader<'a, C, EccChip>>, stream: Value<R>) -> Self {
         let buf = Poseidon::new(loader, R_F, R_P);
-        Self { loader: loader.clone(), stream, buf }
+        Self {
+            loader: loader.clone(),
+            stream,
+            buf,
+        }
     }
 
     pub fn from_spec(
@@ -69,7 +73,11 @@ where
         spec: crate::halo2_verifier::poseidon::Spec<C::Scalar, T, RATE>,
     ) -> Self {
         let buf = Poseidon::from_spec(loader, spec);
-        Self { loader: loader.clone(), stream, buf }
+        Self {
+            loader: loader.clone(),
+            stream,
+            buf,
+        }
     }
 
     pub fn new_stream(&mut self, stream: Value<R>) {
@@ -168,11 +176,22 @@ where
     C::ScalarExt: SerdeObject + FromUniformBytes<64>,
 {
     pub fn new(stream: S) -> Self {
-        Self { loader: NativeLoader, stream, buf: Poseidon::new(&NativeLoader, R_F, R_P) }
+        Self {
+            loader: NativeLoader,
+            stream,
+            buf: Poseidon::new(&NativeLoader, R_F, R_P),
+        }
     }
 
-    pub fn from_spec(stream: S, spec: crate::halo2_verifier::poseidon::Spec<C::Scalar, T, RATE>) -> Self {
-        Self { loader: NativeLoader, stream, buf: Poseidon::from_spec(&NativeLoader, spec) }
+    pub fn from_spec(
+        stream: S,
+        spec: crate::halo2_verifier::poseidon::Spec<C::Scalar, T, RATE>,
+    ) -> Self {
+        Self {
+            loader: NativeLoader,
+            stream,
+            buf: Poseidon::from_spec(&NativeLoader, spec),
+        }
     }
 
     pub fn new_stream(&mut self, stream: S) {
@@ -212,7 +231,11 @@ where
 
     fn common_ec_point(&mut self, ec_point: &C) -> Result<(), Error> {
         let encoded: Vec<_> = Option::from(ec_point.coordinates().map(|coordinates| {
-            [coordinates.x(), coordinates.y()].into_iter().cloned().map(fe_to_fe).collect_vec()
+            [coordinates.x(), coordinates.y()]
+                .into_iter()
+                .cloned()
+                .map(fe_to_fe)
+                .collect_vec()
         }))
         .ok_or_else(|| {
             Error::Transcript(
@@ -238,7 +261,10 @@ where
             .read_exact(data.as_mut())
             .map_err(|err| Error::Transcript(err.kind(), err.to_string()))?;
         let scalar = C::Scalar::from_repr_vartime(data).ok_or_else(|| {
-            Error::Transcript(io::ErrorKind::Other, "Invalid scalar encoding in proof".to_string())
+            Error::Transcript(
+                io::ErrorKind::Other,
+                "Invalid scalar encoding in proof".to_string(),
+            )
         })?;
         self.common_scalar(&scalar)?;
         Ok(scalar)
@@ -286,7 +312,10 @@ where
         self.common_scalar(&scalar)?;
         let data = scalar.to_repr();
         self.stream_mut().write_all(data.as_ref()).map_err(|err| {
-            Error::Transcript(err.kind(), "Failed to write scalar to transcript".to_string())
+            Error::Transcript(
+                err.kind(),
+                "Failed to write scalar to transcript".to_string(),
+            )
         })
     }
 
@@ -318,7 +347,8 @@ impl<C: CurveAffine> EncodedChallenge<C> for ChallengeScalar<C> {
 
 impl<C: CurveAffine, S, const T: usize, const RATE: usize, const R_F: usize, const R_P: usize>
     halo2_proofs::transcript::Transcript<C, ChallengeScalar<C>>
-    for PoseidonTranscript<C, NativeLoader, S, T, RATE, R_F, R_P> where 
+    for PoseidonTranscript<C, NativeLoader, S, T, RATE, R_F, R_P>
+where
     C::ScalarExt: SerdeObject + FromUniformBytes<64>,
 {
     fn squeeze_challenge(&mut self) -> ChallengeScalar<C> {
@@ -421,12 +451,13 @@ where
 }
 
 mod halo2_lib {
-    use crate::halo2_verifier::halo2_curves::CurveAffineExt;
-    use crate::halo2_verifier::system::halo2::transcript::halo2::NativeEncoding;
+    use crate::halo2_verifier::{
+        halo2_curves::CurveAffineExt, system::halo2::transcript::halo2::NativeEncoding,
+    };
     use halo2_base::utils::PrimeField;
-    use halo2_ecc::ecc::BaseFieldEccChip;
+    use hyperzexe_ecc::ecc::EccChip;
 
-    impl<'a, C: CurveAffineExt> NativeEncoding<'a, C> for BaseFieldEccChip<C>
+    impl<'a, C: CurveAffineExt> NativeEncoding<'a, C> for EccChip<C::Base>
     where
         C::Scalar: PrimeField,
         C::Base: PrimeField,
@@ -436,26 +467,6 @@ mod halo2_lib {
             _: &mut Self::Context,
             ec_point: &Self::AssignedEcPoint,
         ) -> Result<Vec<Self::AssignedScalar>, crate::halo2_verifier::Error> {
-            Ok(vec![ec_point.x().native().clone(), ec_point.y().native().clone()])
-        }
-    }
-}
-
-/*
-mod halo2_wrong {
-    use crate::halo2_verifier::system::halo2::transcript::halo2::NativeEncoding;
-    use halo2_curves::CurveAffine;
-    use halo2_proofs::circuit::AssignedCell;
-    use halo2_wrong_ecc::BaseFieldEccChip;
-
-    impl<'a, C: CurveAffine, const LIMBS: usize, const BITS: usize> NativeEncoding<'a, C>
-        for BaseFieldEccChip<C, LIMBS, BITS>
-    {
-        fn encode(
-            &self,
-            _: &mut Self::Context,
-            ec_point: &Self::AssignedEcPoint,
-        ) -> Result<Vec<AssignedCell<C::Scalar, C::Scalar>>, crate::halo2_verifier::Error> {
             Ok(vec![
                 ec_point.x().native().clone(),
                 ec_point.y().native().clone(),
@@ -463,4 +474,25 @@ mod halo2_wrong {
         }
     }
 }
-*/
+
+// mod halo2_wrong {
+// use crate::halo2_verifier::system::halo2::transcript::halo2::NativeEncoding;
+// use halo2_curves::CurveAffine;
+// use halo2_proofs::circuit::AssignedCell;
+// use halo2_wrong_ecc::BaseFieldEccChip;
+//
+// impl<'a, C: CurveAffine, const LIMBS: usize, const BITS: usize>
+// NativeEncoding<'a, C> for BaseFieldEccChip<C, LIMBS, BITS>
+// {
+// fn encode(
+// &self,
+// _: &mut Self::Context,
+// ec_point: &Self::AssignedEcPoint,
+// ) -> Result<Vec<AssignedCell<C::Scalar, C::Scalar>>,
+// crate::halo2_verifier::Error> { Ok(vec![
+// ec_point.x().native().clone(),
+// ec_point.y().native().clone(),
+// ])
+// }
+// }
+// }

@@ -1,5 +1,5 @@
-use crate::halo2_verifier::halo2_proofs::circuit;
 use crate::halo2_verifier::{
+    halo2_proofs::circuit,
     loader::{
         halo2::shim::{EccInstructions, IntegerInstructions},
         EcPointLoader, LoadedEcPoint, LoadedScalar, Loader, ScalarLoader,
@@ -62,14 +62,19 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Halo2Loader<'a, C, Ecc
     }
 
     fn assign_const_scalar(self: &Rc<Self>, constant: C::Scalar) -> EccChip::AssignedScalar {
-        self.scalar_chip().assign_constant(&mut self.ctx_mut(), constant).unwrap()
+        self.scalar_chip()
+            .assign_constant(&mut self.ctx_mut(), constant)
+            .unwrap()
     }
 
     pub fn assign_scalar(
         self: &Rc<Self>,
         scalar: circuit::Value<C::Scalar>,
     ) -> Scalar<'a, C, EccChip> {
-        let assigned = self.scalar_chip().assign_integer(&mut self.ctx_mut(), scalar).unwrap();
+        let assigned = self
+            .scalar_chip()
+            .assign_scalar(&mut self.ctx_mut(), scalar)
+            .unwrap();
         self.scalar_from_assigned(assigned)
     }
 
@@ -86,18 +91,27 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Halo2Loader<'a, C, Ecc
     ) -> Scalar<'a, C, EccChip> {
         let index = *self.num_scalar.borrow();
         *self.num_scalar.borrow_mut() += 1;
-        Scalar { loader: self.clone(), index, value: value.into() }
+        Scalar {
+            loader: self.clone(),
+            index,
+            value: value.into(),
+        }
     }
 
     fn assign_const_ec_point(self: &Rc<Self>, constant: C) -> EccChip::AssignedEcPoint {
-        self.ecc_chip().assign_constant(&mut self.ctx_mut(), constant).unwrap()
+        self.ecc_chip()
+            .assign_constant(&mut self.ctx_mut(), constant)
+            .unwrap()
     }
 
     pub fn assign_ec_point(
         self: &Rc<Self>,
         ec_point: circuit::Value<C>,
     ) -> EcPoint<'a, C, EccChip> {
-        let assigned = self.ecc_chip().assign_point(&mut self.ctx_mut(), ec_point).unwrap();
+        let assigned = self
+            .ecc_chip()
+            .assign_point(&mut self.ctx_mut(), ec_point)
+            .unwrap();
         self.ec_point_from_assigned(assigned)
     }
 
@@ -114,7 +128,11 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Halo2Loader<'a, C, Ecc
     ) -> EcPoint<'a, C, EccChip> {
         let index = *self.num_ec_point.borrow();
         *self.num_ec_point.borrow_mut() += 1;
-        EcPoint { loader: self.clone(), index, value: value.into() }
+        EcPoint {
+            loader: self.clone(),
+            index,
+            value: value.into(),
+        }
     }
 
     fn add(
@@ -176,7 +194,7 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Halo2Loader<'a, C, Ecc
                 IntegerInstructions::sub(self.scalar_chip().deref(), &mut self.ctx_mut(), lhs, rhs)
                     .map(Value::Assigned)
                     .unwrap()
-            }
+            },
         };
         self.scalar(output)
     }
@@ -218,7 +236,7 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Halo2Loader<'a, C, Ecc
                 IntegerInstructions::neg(self.scalar_chip().deref(), &mut self.ctx_mut(), assigned)
                     .map(Value::Assigned)
                     .unwrap()
-            }
+            },
         };
         self.scalar(output)
     }
@@ -244,7 +262,9 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Halo2Loader<'a, C, Ecc
     fn start_row_metering(self: &Rc<Self>, identifier: &str) {
         use crate::halo2_verifier::loader::halo2::shim::Context;
 
-        self.row_meterings.borrow_mut().push((identifier.to_string(), self.ctx().offset()))
+        self.row_meterings
+            .borrow_mut()
+            .push((identifier.to_string(), self.ctx().offset()))
     }
 
     fn end_row_metering(self: &Rc<Self>) {
@@ -340,7 +360,9 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> LoadedScalar<C::Scalar
 
 impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Debug for Scalar<'a, C, EccChip> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Scalar").field("value", &self.value).finish()
+        f.debug_struct("Scalar")
+            .field("value", &self.value)
+            .finish()
     }
 }
 
@@ -503,7 +525,10 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> LoadedEcPoint<C>
 
 impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> Debug for EcPoint<'a, C, EccChip> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EcPoint").field("index", &self.index).field("value", &self.value).finish()
+        f.debug_struct("EcPoint")
+            .field("index", &self.index)
+            .field("value", &self.value)
+            .finish()
     }
 }
 
@@ -532,7 +557,10 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> ScalarLoader<C::Scalar
         values: &[(C::Scalar, &Scalar<'a, C, EccChip>)],
         constant: C::Scalar,
     ) -> Scalar<'a, C, EccChip> {
-        let values = values.iter().map(|(coeff, value)| (*coeff, value.assigned())).collect_vec();
+        let values = values
+            .iter()
+            .map(|(coeff, value)| (*coeff, value.assigned()))
+            .collect_vec();
         self.scalar(Value::Assigned(
             self.scalar_chip()
                 .sum_with_coeff_and_const(&mut self.ctx_mut(), &values, constant)
@@ -587,7 +615,10 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> EcPointLoader<C>
     }
 
     fn multi_scalar_multiplication(
-        pairs: &[(&<Self as ScalarLoader<C::Scalar>>::LoadedScalar, &EcPoint<'a, C, EccChip>)],
+        pairs: &[(
+            &<Self as ScalarLoader<C::Scalar>>::LoadedScalar,
+            &EcPoint<'a, C, EccChip>,
+        )],
     ) -> EcPoint<'a, C, EccChip> {
         let loader = &pairs[0].0.loader;
 
@@ -604,18 +635,23 @@ impl<'a, C: CurveAffine, EccChip: EccInstructions<'a, C>> EcPointLoader<C>
                     match (scalar.value().deref(), base.value().deref()) {
                         (Value::Constant(scalar), Value::Constant(base)) => {
                             constant = (*base * scalar + constant).into()
-                        }
+                        },
                         (Value::Assigned(_), Value::Constant(base)) => {
                             fixed_base.push((scalar, *base))
-                        }
+                        },
                         (Value::Constant(scalar), Value::Assigned(_))
                             if scalar.eq(&C::Scalar::ONE) =>
                         {
                             variable_base_non_scaled.push(base);
-                        }
+                        },
                         _ => variable_base_scaled.push((scalar, base)),
                     };
-                    (constant, fixed_base, variable_base_non_scaled, variable_base_scaled)
+                    (
+                        constant,
+                        fixed_base,
+                        variable_base_non_scaled,
+                        variable_base_scaled,
+                    )
                 },
             );
 

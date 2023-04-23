@@ -1,20 +1,20 @@
-use crate::halo2_verifier::halo2_curves::bn256::{Bn256, Fq, Fr, G1Affine};
-use crate::halo2_verifier::halo2_proofs::{
-    circuit::{Layouter, SimpleFloorPlanner, Value},
-    plonk::{self, create_proof, verify_proof, Circuit, Column, ConstraintSystem, Instance},
-    poly::{
-        commitment::ParamsProver,
-        kzg::{
-            commitment::{KZGCommitmentScheme, ParamsKZG},
-            multiopen::{ProverSHPLONK, VerifierSHPLONK},
-            strategy::SingleStrategy,
+use crate::halo2_verifier::{
+    halo2_curves::bn256::{Bn256, Fq, Fr, G1Affine},
+    halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        plonk::{self, create_proof, verify_proof, Circuit, Column, ConstraintSystem, Instance},
+        poly::{
+            commitment::ParamsProver,
+            kzg::{
+                commitment::{KZGCommitmentScheme, ParamsKZG},
+                multiopen::{ProverSHPLONK, VerifierSHPLONK},
+                strategy::SingleStrategy,
+            },
+        },
+        transcript::{
+            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     },
-    transcript::{
-        Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
-    },
-};
-use crate::halo2_verifier::{
     loader::{
         self,
         halo2::test::{Snark, SnarkWitness},
@@ -42,13 +42,12 @@ use crate::halo2_verifier::{
 };
 use ark_std::{end_timer, start_timer};
 use halo2_base::{Context, ContextParams};
-use halo2_ecc::ecc::EccChip;
-use halo2_ecc::fields::fp::FpConfig;
+use hyperzexe_ecc::{ecc::EccChip, fields::fp::FpConfig};
 use paste::paste;
 use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::{
+    fs::File,
     io::{Cursor, Read, Write},
     rc::Rc,
 };
@@ -58,8 +57,7 @@ const RATE: usize = 4;
 const R_F: usize = 8;
 const R_P: usize = 60;
 
-type BaseFieldEccChip = halo2_ecc::ecc::BaseFieldEccChip<G1Affine>;
-type Halo2Loader<'a> = loader::halo2::Halo2Loader<'a, G1Affine, BaseFieldEccChip>;
+type Halo2Loader<'a> = loader::halo2::Halo2Loader<'a, G1Affine, EccChip>;
 type PoseidonTranscript<L, S> = GenericPoseidonTranscript<G1Affine, L, S, T, RATE, R_F, R_P>;
 
 type Pcs = Kzg<Bn256, Bdfg21>;
@@ -72,7 +70,7 @@ type Plonk = verifier::Plonk<Pcs, LimbsEncoding<LIMBS, BITS>>;
 // for tuning the circuit
 #[derive(Serialize, Deserialize)]
 pub struct Halo2VerifierCircuitConfigParams {
-    pub strategy: halo2_ecc::fields::fp::FpStrategy,
+    pub strategy: hyperzexe_ecc::fields::fp::FpStrategy,
     pub degree: u32,
     pub num_advice: usize,
     pub num_lookup_advice: usize,
@@ -91,7 +89,7 @@ pub fn load_verify_circuit_degree() -> u32 {
 
 #[derive(Clone)]
 pub struct Halo2VerifierCircuitConfig {
-    pub base_field_config: halo2_ecc::fields::fp::FpConfig<Fr, Fq>,
+    pub base_field_config: hyperzexe_ecc::fields::fp::FpConfig<Fr, Fq>,
     pub instance: Column<Instance>,
 }
 
@@ -105,7 +103,7 @@ impl Halo2VerifierCircuitConfig {
             "For now we fix limb_bits = {}, otherwise change code",
             BITS
         );
-        let base_field_config = halo2_ecc::fields::fp::FpConfig::configure(
+        let base_field_config = hyperzexe_ecc::fields::fp::FpConfig::configure(
             meta,
             params.strategy,
             &[params.num_advice],
@@ -122,7 +120,10 @@ impl Halo2VerifierCircuitConfig {
         let instance = meta.instance_column();
         meta.enable_equality(instance);
 
-        Self { base_field_config, instance }
+        Self {
+            base_field_config,
+            instance,
+        }
     }
 }
 
@@ -137,7 +138,10 @@ pub fn accumulate<'a>(
         instances
             .iter()
             .map(|instances| {
-                instances.iter().map(|instance| loader.assign_scalar(*instance)).collect_vec()
+                instances
+                    .iter()
+                    .map(|instance| loader.assign_scalar(*instance))
+                    .collect_vec()
             })
             .collect_vec()
     };
@@ -212,7 +216,9 @@ impl Accumulation {
         };
 
         let KzgAccumulator { lhs, rhs } = accumulator;
-        let instances = [lhs.x, lhs.y, rhs.x, rhs.y].map(fe_to_limbs::<_, _, LIMBS, BITS>).concat();
+        let instances = [lhs.x, lhs.y, rhs.x, rhs.y]
+            .map(fe_to_limbs::<_, _, LIMBS, BITS>)
+            .concat();
 
         Self {
             svk,
@@ -305,7 +311,11 @@ impl Circuit<Fr> for Accumulation {
     fn without_witnesses(&self) -> Self {
         Self {
             svk: self.svk,
-            snarks: self.snarks.iter().map(SnarkWitness::without_witnesses).collect(),
+            snarks: self
+                .snarks
+                .iter()
+                .map(SnarkWitness::without_witnesses)
+                .collect(),
             instances: Vec::new(),
             as_vk: self.as_vk,
             as_proof: Value::unknown(),
@@ -341,7 +351,10 @@ impl Circuit<Fr> for Accumulation {
         let instance = meta.instance_column();
         meta.enable_equality(instance);
 
-        Self::Config { base_field_config, instance }
+        Self::Config {
+            base_field_config,
+            instance,
+        }
     }
 
     fn synthesize(
@@ -373,8 +386,13 @@ impl Circuit<Fr> for Accumulation {
 
                 let loader =
                     Halo2Loader::new(EccChip::construct(config.base_field_config.clone()), ctx);
-                let KzgAccumulator { lhs, rhs } =
-                    accumulate(&self.svk, &loader, &self.snarks, &self.as_vk, self.as_proof());
+                let KzgAccumulator { lhs, rhs } = accumulate(
+                    &self.svk,
+                    &loader,
+                    &self.snarks,
+                    &self.as_vk,
+                    self.as_proof(),
+                );
 
                 let lhs = lhs.assigned();
                 let rhs = rhs.assigned();
@@ -396,7 +414,8 @@ impl Circuit<Fr> for Accumulation {
                 Ok(())
             },
         )?;
-        // TODO: use less instances by following Scroll's strategy of keeping only last bit of y coordinate
+        // TODO: use less instances by following Scroll's strategy of keeping only last
+        // bit of y coordinate
         let mut layouter = layouter.namespace(|| "expose");
         for (i, cell) in assigned_instances.unwrap().into_iter().enumerate() {
             layouter.constrain_instance(cell, config.instance, i)?;
@@ -445,14 +464,16 @@ macro_rules! test {
 }
 
 test!(
-    // create aggregation circuit A that aggregates two simple snarks {B,C}, then verify proof of this aggregation circuit A
+    // create aggregation circuit A that aggregates two simple snarks {B,C}, then verify proof of
+    // this aggregation circuit A
     zk_aggregate_two_snarks,
     21,
     halo2_kzg_config!(true, 1, Some(Accumulation::accumulator_indices())),
     Accumulation::two_snark()
 );
 test!(
-    // create aggregation circuit A that aggregates two copies of same aggregation circuit B that aggregates two simple snarks {C, D}, then verifies proof of this aggregation circuit A
+    // create aggregation circuit A that aggregates two copies of same aggregation circuit B that
+    // aggregates two simple snarks {C, D}, then verifies proof of this aggregation circuit A
     zk_aggregate_two_snarks_with_accumulator,
     22, // 22 = 21 + 1 since there are two copies of circuit B
     halo2_kzg_config!(true, 1, Some(Accumulation::accumulator_indices())),
@@ -478,8 +499,10 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
 
     let proof_time = start_timer!(|| "create proof");
     // usual shenanigans to turn nested Vec into nested slice
-    let instances0: Vec<Vec<Vec<Fr>>> =
-        circuits.iter().map(|circuit| T::instances(circuit)).collect_vec();
+    let instances0: Vec<Vec<Vec<Fr>>> = circuits
+        .iter()
+        .map(|circuit| T::instances(circuit))
+        .collect_vec();
     let instances1: Vec<Vec<&[Fr]>> = instances0
         .iter()
         .map(|instances| instances.iter().map(Vec::as_slice).collect_vec())
@@ -494,7 +517,7 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
                 let mut buf = vec![];
                 file.read_to_end(&mut buf).unwrap();
                 buf
-            }
+            },
             Err(_) => {
                 let mut transcript = PoseidonTranscript::<NativeLoader, Vec<u8>>::init(Vec::new());
                 create_proof::<KZGCommitmentScheme<_>, ProverSHPLONK<_>, _, _, _, _>(
@@ -511,7 +534,7 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
                     .expect(format!("{:?} should exist", path).as_str());
                 file.write_all(&proof).unwrap();
                 proof
-            }
+            },
         }
     };
     end_timer!(proof_time);
@@ -537,82 +560,87 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
     }
     end_timer!(verify_time);
 
-    (params, Snark::new(protocol.clone(), instances0.into_iter().flatten().collect_vec(), proof))
+    (
+        params,
+        Snark::new(
+            protocol.clone(),
+            instances0.into_iter().flatten().collect_vec(),
+            proof,
+        ),
+    )
 }
 
-/*
-pub mod zkevm {
-    use super::*;
-    use zkevm_circuit_benchmarks::evm_circuit::TestCircuit as EvmCircuit;
-    use zkevm_circuits::evm_circuit::witness::RwMap;
-    use zkevm_circuits::state_circuit::StateCircuit;
-
-    impl TargetCircuit for EvmCircuit<Fr> {
-        const TARGET_CIRCUIT_K: u32 = 18;
-        const PUBLIC_INPUT_SIZE: usize = 0; // (Self::TARGET_CIRCUIT_K * 2) as usize;
-        const N_PROOFS: usize = 1;
-        const NAME: &'static str = "zkevm";
-
-        fn default_circuit() -> Self {
-            Self::default()
-        }
-        fn instances(&self) -> Vec<Vec<Fr>> {
-            vec![]
-        }
-    }
-
-    fn evm_verify_circuit() -> Accumulation {
-        let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
-        println!("creating aggregation circuit");
-        Accumulation::new(&params, [evm_snark])
-    }
-
-    test!(
-        bench_evm_circuit,
-        load_verify_circuit_degree(),
-        halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
-        evm_verify_circuit()
-    );
-
-    impl TargetCircuit for StateCircuit<Fr> {
-        const TARGET_CIRCUIT_K: u32 = 18;
-        const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
-        const N_PROOFS: usize = 1;
-        const NAME: &'static str = "state-circuit";
-
-        fn default_circuit() -> Self {
-            StateCircuit::<Fr>::new(Fr::default(), RwMap::default(), 1)
-        }
-        fn instances(&self) -> Vec<Vec<Fr>> {
-            self.instance()
-        }
-    }
-
-    fn state_verify_circuit() -> Accumulation {
-        let (params, snark) = create_snark::<StateCircuit<Fr>>();
-        println!("creating aggregation circuit");
-        Accumulation::new(&params, [snark])
-    }
-
-    test!(
-        bench_state_circuit,
-        load_verify_circuit_degree(),
-        halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
-        state_verify_circuit()
-    );
-
-    fn evm_and_state_aggregation_circuit() -> Accumulation {
-        let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
-        let (_, state_snark) = create_snark::<StateCircuit<Fr>>();
-        println!("creating aggregation circuit");
-        Accumulation::new(&params, [evm_snark, state_snark])
-    }
-
-    test!(
-        bench_evm_and_state,
-        load_verify_circuit_degree(),
-        halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
-        evm_and_state_aggregation_circuit()
-    );
-}
-*/
+// pub mod zkevm {
+// use super::*;
+// use zkevm_circuit_benchmarks::evm_circuit::TestCircuit as EvmCircuit;
+// use zkevm_circuits::evm_circuit::witness::RwMap;
+// use zkevm_circuits::state_circuit::StateCircuit;
+//
+// impl TargetCircuit for EvmCircuit<Fr> {
+// const TARGET_CIRCUIT_K: u32 = 18;
+// const PUBLIC_INPUT_SIZE: usize = 0; // (Self::TARGET_CIRCUIT_K * 2) as usize;
+// const N_PROOFS: usize = 1;
+// const NAME: &'static str = "zkevm";
+//
+// fn default_circuit() -> Self {
+// Self::default()
+// }
+// fn instances(&self) -> Vec<Vec<Fr>> {
+// vec![]
+// }
+// }
+//
+// fn evm_verify_circuit() -> Accumulation {
+// let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
+// println!("creating aggregation circuit");
+// Accumulation::new(&params, [evm_snark])
+// }
+//
+// test!(
+// bench_evm_circuit,
+// load_verify_circuit_degree(),
+// halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
+// evm_verify_circuit()
+// );
+//
+// impl TargetCircuit for StateCircuit<Fr> {
+// const TARGET_CIRCUIT_K: u32 = 18;
+// const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
+// const N_PROOFS: usize = 1;
+// const NAME: &'static str = "state-circuit";
+//
+// fn default_circuit() -> Self {
+// StateCircuit::<Fr>::new(Fr::default(), RwMap::default(), 1)
+// }
+// fn instances(&self) -> Vec<Vec<Fr>> {
+// self.instance()
+// }
+// }
+//
+// fn state_verify_circuit() -> Accumulation {
+// let (params, snark) = create_snark::<StateCircuit<Fr>>();
+// println!("creating aggregation circuit");
+// Accumulation::new(&params, [snark])
+// }
+//
+// test!(
+// bench_state_circuit,
+// load_verify_circuit_degree(),
+// halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
+// state_verify_circuit()
+// );
+//
+// fn evm_and_state_aggregation_circuit() -> Accumulation {
+// let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
+// let (_, state_snark) = create_snark::<StateCircuit<Fr>>();
+// println!("creating aggregation circuit");
+// Accumulation::new(&params, [evm_snark, state_snark])
+// }
+//
+// test!(
+// bench_evm_and_state,
+// load_verify_circuit_degree(),
+// halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
+// evm_and_state_aggregation_circuit()
+// );
+// }
