@@ -1,21 +1,31 @@
-use crate::halo2_verifier::loader::LoadedEcPoint;
+use halo2_base::utils::CurveAffineExt;
+
+use crate::{halo2_verifier::util::transcript::TranscriptRead, EcPoint};
 
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
-struct BulletReductionProof<L> {
-    L_vec: Vec<L::LoadedEcPoint>,
-    R_vec: Vec<L::LoadedEcPoint>,
-    u_vec: Vec<L::LoadedScalar>,
+struct BulletReductionProof<C: CurveAffineExt> {
+    L_vec: Vec<EcPoint<C>>,
+    R_vec: Vec<EcPoint<C>>,
+    u_vec: Vec<EcPoint<C>>,
 }
 
-impl<L: Loader<C>> BulletReductionProof {
-    fn read<T: TranscriptRead<C, L>>(n: usize, transcript: &mut T) -> Self {
+impl<C: CurveAffineExt> BulletReductionProof<C> {
+    fn read_proof<T: TranscriptRead<C>>(n: usize, transcript: &mut T) -> Self {
         let mut n = n;
+        let mut L_vec = Vec::new();
+        let mut R_vec = Vec::new();
+        let mut u_vec = Vec::new();
         while n != 1 {
             n >>= 1;
             L_vec.push(transcript.read_ec_point().unwrap());
             R_vec.push(transcript.read_ec_point().unwrap());
             u_vec.push(transcript.squeeze_challenge());
+        }
+        Self {
+            L_vec,
+            R_vec,
+            u_vec,
         }
     }
 

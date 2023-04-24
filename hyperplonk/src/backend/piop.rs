@@ -211,7 +211,7 @@ where
                 .map(|p| Arc::new(MultilinearPolynomial::new(p)))
                 .collect_vec();
             assert_eq!(polys.len(), *num_witness_polys);
-            
+
             witness_comms.push(Pcs::multi_commit_and_send(&pp.pcs, &polys, transcript)?);
             witness_polys.extend(polys);
             challenges.extend(transcript.squeeze_challenges(*num_challenges));
@@ -354,11 +354,10 @@ where
                 witness_offsets.push(vec![(offset, *num_witness_poly)]);
                 offset += *num_witness_poly;
             }
-            let mut res = vec![
-                vec![
-                    (preprocess_offset, pp.preprocess_polys.len()),
-                    (permutation_offset, permutation_polys.len()),
-                ]];
+            let mut res = vec![vec![
+                (preprocess_offset, pp.preprocess_polys.len()),
+                (permutation_offset, permutation_polys.len()),
+            ]];
             res.extend(witness_offsets);
             res.extend(vec![
                 vec![(lookup_count_offset, lookup_count_polys.len())],
@@ -371,7 +370,8 @@ where
             res
         };
 
-        // println!("poly_groups: {:?}", polys.iter().map(|g| g.evaluate(&points[0])).enumerate().collect_vec());
+        // println!("poly_groups: {:?}", polys.iter().map(|g|
+        // g.evaluate(&points[0])).enumerate().collect_vec());
         // println!("eval_groups: {:?}", evals.iter().enumerate().collect_vec());
         let poly_groups = reorder_into_groups(polys, &segment_groups);
         let eval_groups = reorder_into_groups(evals, &segment_groups);
@@ -470,7 +470,8 @@ where
                 vec![F::zero(); instances.len()],
                 // preprocess polys
                 proof.batch_proof.eval_groups[0][0..vp.num_preprocess].to_vec(),
-            ].concat();
+            ]
+            .concat();
 
             // witness polys
             for i in 0..vp.num_witness_polys.len() {
@@ -490,8 +491,7 @@ where
             .iter()
             .map(|v| v.as_slice())
             .collect_vec();
-        let random_combined_eval = proof
-            .intermediate_evals[instances.len()..]
+        let random_combined_eval = proof.intermediate_evals[instances.len()..]
             .iter()
             .fold(F::zero(), |acc, e| acc * eta + e);
         let points = verify_sum_check(

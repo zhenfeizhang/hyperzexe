@@ -1,10 +1,10 @@
-use crate::halo2_verifier::halo2_proofs::ff::PrimeField;
-use crate::halo2_verifier::halo2_proofs::{
-    plonk::{self, Any, ConstraintSystem, FirstPhase, SecondPhase, ThirdPhase, VerifyingKey},
-    poly::{self, commitment::Params},
-    transcript::{EncodedChallenge, Transcript},
-};
 use crate::halo2_verifier::{
+    halo2_proofs::{
+        ff::PrimeField,
+        plonk::{self, Any, ConstraintSystem, FirstPhase, SecondPhase, ThirdPhase, VerifyingKey},
+        poly::{self, commitment::Params},
+        transcript::{EncodedChallenge, Transcript},
+    },
     util::{
         arithmetic::{root_of_unity, CurveAffine, Domain, Rotation},
         protocol::{
@@ -18,7 +18,6 @@ use halo2_proofs::ff::FromUniformBytes;
 use num_integer::Integer;
 use std::{io, iter, mem::size_of};
 
-// pub mod strategy;
 pub mod transcript;
 
 #[cfg(test)]
@@ -36,11 +35,12 @@ pub struct Config {
 
 impl Config {
     pub fn kzg() -> Self {
-        Self { zk: true, query_instance: false, num_proof: 1, ..Default::default() }
-    }
-
-    pub fn ipa() -> Self {
-        Self { zk: true, query_instance: true, num_proof: 1, ..Default::default() }
+        Self {
+            zk: true,
+            query_instance: false,
+            num_proof: 1,
+            ..Default::default()
+        }
     }
 
     pub fn set_zk(mut self, zk: bool) -> Self {
@@ -84,7 +84,13 @@ where
     assert_eq!(vk.get_domain().k(), params.k());
 
     let cs = vk.cs();
-    let Config { zk, query_instance, num_proof, num_instance, accumulator_indices } = config;
+    let Config {
+        zk,
+        query_instance,
+        num_proof,
+        num_instance,
+        accumulator_indices,
+    } = config;
 
     let k = params.k() as usize;
     let domain = Domain::new(k, root_of_unity(k));
@@ -241,12 +247,20 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
     }
 
     fn num_instance(&self) -> Vec<usize> {
-        iter::repeat(self.num_instance.clone()).take(self.num_proof).flatten().collect()
+        iter::repeat(self.num_instance.clone())
+            .take(self.num_proof)
+            .flatten()
+            .collect()
     }
 
     fn num_witness(&self) -> Vec<usize> {
         iter::empty()
-            .chain(self.num_advice.clone().iter().map(|num| self.num_proof * num))
+            .chain(
+                self.num_advice
+                    .clone()
+                    .iter()
+                    .map(|num| self.num_proof * num),
+            )
             .chain([
                 self.num_proof * self.num_lookup_permuted,
                 self.num_proof * (self.num_permutation_z + self.num_lookup_z) + self.zk as usize,
@@ -275,7 +289,12 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
     }
 
     fn cs_witness_offset(&self) -> usize {
-        self.witness_offset() + self.num_witness().iter().take(self.num_advice.len()).sum::<usize>()
+        self.witness_offset()
+            + self
+                .num_witness()
+                .iter()
+                .take(self.num_advice.len())
+                .sum::<usize>()
     }
 
     fn query<C: Into<Any> + Copy, R: Into<Rotation>>(
@@ -291,9 +310,11 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
             Any::Advice(advice) => {
                 column_index = self.advice_index[column_index];
                 let phase_offset = self.num_proof
-                    * self.num_advice[..advice.phase() as usize].iter().sum::<usize>();
+                    * self.num_advice[..advice.phase() as usize]
+                        .iter()
+                        .sum::<usize>();
                 self.witness_offset() + phase_offset + t * self.num_advice[advice.phase() as usize]
-            }
+            },
         };
         Query::new(offset + column_index, rotation.into())
     }
@@ -301,24 +322,33 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
     fn instance_queries(&'a self, t: usize) -> impl IntoIterator<Item = Query> + 'a {
         self.query_instance
             .then(|| {
-                self.cs.instance_queries().iter().map(move |(column, rotation)| {
-                    self.query(*column.column_type(), column.index(), *rotation, t)
-                })
+                self.cs
+                    .instance_queries()
+                    .iter()
+                    .map(move |(column, rotation)| {
+                        self.query(*column.column_type(), column.index(), *rotation, t)
+                    })
             })
             .into_iter()
             .flatten()
     }
 
     fn advice_queries(&'a self, t: usize) -> impl IntoIterator<Item = Query> + 'a {
-        self.cs.advice_queries().iter().map(move |(column, rotation)| {
-            self.query(*column.column_type(), column.index(), *rotation, t)
-        })
+        self.cs
+            .advice_queries()
+            .iter()
+            .map(move |(column, rotation)| {
+                self.query(*column.column_type(), column.index(), *rotation, t)
+            })
     }
 
     fn fixed_queries(&'a self) -> impl IntoIterator<Item = Query> + 'a {
-        self.cs.fixed_queries().iter().map(move |(column, rotation)| {
-            self.query(*column.column_type(), column.index(), *rotation, 0)
-        })
+        self.cs
+            .fixed_queries()
+            .iter()
+            .map(move |(column, rotation)| {
+                self.query(*column.column_type(), column.index(), *rotation, 0)
+            })
     }
 
     fn permutation_fixed_queries(&'a self) -> impl IntoIterator<Item = Query> + 'a {
@@ -338,13 +368,13 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
             (true, true) => (0..self.num_permutation_z)
                 .flat_map(move |i| {
                     let z = self.permutation_poly(t, i);
-                    iter::empty().chain([Query::new(z, 0), Query::new(z, 1)]).chain(
-                        if i == self.num_permutation_z - 1 {
+                    iter::empty()
+                        .chain([Query::new(z, 0), Query::new(z, 1)])
+                        .chain(if i == self.num_permutation_z - 1 {
                             None
                         } else {
                             Some(Query::new(z, self.rotation_last()))
-                        },
-                    )
+                        })
                 })
                 .collect_vec(),
             (true, false) => iter::empty()
@@ -404,12 +434,18 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
     }
 
     fn quotient_query(&self) -> Query {
-        Query::new(self.witness_offset() + self.num_witness().iter().sum::<usize>(), 0)
+        Query::new(
+            self.witness_offset() + self.num_witness().iter().sum::<usize>(),
+            0,
+        )
     }
 
     fn random_query(&self) -> Option<Query> {
         self.zk.then(|| {
-            Query::new(self.witness_offset() + self.num_witness().iter().sum::<usize>() - 1, 0)
+            Query::new(
+                self.witness_offset() + self.num_witness().iter().sum::<usize>() - 1,
+                0,
+            )
         })
     }
 
@@ -417,7 +453,10 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
         expression.evaluate(
             &|scalar| Expression::Constant(scalar),
             &|_| unreachable!(),
-            &|query| self.query(Any::Fixed, query.column_index(), query.rotation(), t).into(),
+            &|query| {
+                self.query(Any::Fixed, query.column_index(), query.rotation(), t)
+                    .into()
+            },
             &|query| {
                 self.query(
                     match query.phase() {
@@ -432,10 +471,14 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
                 )
                 .into()
             },
-            &|query| self.query(Any::Instance, query.column_index(), query.rotation(), t).into(),
+            &|query| {
+                self.query(Any::Instance, query.column_index(), query.rotation(), t)
+                    .into()
+            },
             &|challenge| {
-                let phase_offset =
-                    self.num_challenge[..challenge.phase() as usize].iter().sum::<usize>();
+                let phase_offset = self.num_challenge[..challenge.phase() as usize]
+                    .iter()
+                    .sum::<usize>();
                 Expression::Challenge(phase_offset + self.challenge_index[challenge.index()])
             },
             &|a| -a,
@@ -447,7 +490,9 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
 
     fn gate_constraints(&'a self, t: usize) -> impl IntoIterator<Item = Expression<F>> + 'a {
         self.cs.gates().iter().flat_map(move |gate| {
-            gate.polynomials().iter().map(move |expression| self.convert(expression, t))
+            gate.polynomials()
+                .iter()
+                .map(move |expression| self.convert(expression, t))
         })
     }
 
@@ -528,13 +573,16 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
             .collect_vec();
 
         iter::empty()
-            .chain(zs.first().map(|(z_0, _, _)| l_0 * (one - z_0)))
-            .chain(zs.last().and_then(|(z_l, _, _)| self.zk.then(|| l_last * (z_l * z_l - z_l))))
+            .chain(zs.first().map(|(z_0, ..)| l_0 * (one - z_0)))
+            .chain(
+                zs.last()
+                    .and_then(|(z_l, ..)| self.zk.then(|| l_last * (z_l * z_l - z_l))),
+            )
             .chain(if self.zk {
                 zs.iter()
                     .skip(1)
                     .zip(zs.iter())
-                    .map(|((z, _, _), (_, _, z_prev_last))| l_0 * (z - z_prev_last))
+                    .map(|((z, ..), (_, _, z_prev_last))| l_0 * (z - z_prev_last))
                     .collect_vec()
             } else {
                 Vec::new()
@@ -610,7 +658,10 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
 
         let compress = |expressions: &'a [plonk::Expression<F>]| {
             Expression::DistributePowers(
-                expressions.iter().map(|expression| self.convert(expression, t)).collect(),
+                expressions
+                    .iter()
+                    .map(|expression| self.convert(expression, t))
+                    .collect(),
                 self.theta().into(),
             )
         };
@@ -661,7 +712,10 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
             })
             .collect_vec();
         let numerator = Expression::DistributePowers(constraints, self.alpha().into());
-        QuotientPolynomial { chunk_degree: 1, numerator }
+        QuotientPolynomial {
+            chunk_degree: 1,
+            numerator,
+        }
     }
 
     fn accumulator_indices(
@@ -739,7 +793,8 @@ fn instance_committing_key<'a, C: CurveAffine, P: Params<'a, C>>(
         .step_by(repr_len)
         .map(|offset| {
             let mut repr = C::Repr::default();
-            repr.as_mut().copy_from_slice(&buf[offset..offset + repr_len]);
+            repr.as_mut()
+                .copy_from_slice(&buf[offset..offset + repr_len]);
             C::from_bytes(&repr).unwrap()
         })
         .take(len)
@@ -748,9 +803,13 @@ fn instance_committing_key<'a, C: CurveAffine, P: Params<'a, C>>(
     let w = {
         let offset = size_of::<u32>() + (2 << params.k()) * repr_len;
         let mut repr = C::Repr::default();
-        repr.as_mut().copy_from_slice(&buf[offset..offset + repr_len]);
+        repr.as_mut()
+            .copy_from_slice(&buf[offset..offset + repr_len]);
         C::from_bytes(&repr).unwrap()
     };
 
-    InstanceCommittingKey { bases, constant: Some(w) }
+    InstanceCommittingKey {
+        bases,
+        constant: Some(w),
+    }
 }

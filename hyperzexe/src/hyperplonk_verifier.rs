@@ -1,37 +1,37 @@
-use serde::{Serialize, Deserialize};
+use halo2_ecc::fields::FieldChip;
+use halo2_proofs::curves::CurveAffine;
+use hyperplonk::backend::util::expression::{Expression, Query};
+use serde::{Deserialize, Serialize};
 
-mod hyrax_verifier;
-mod sumcheck_verifier;
+use crate::{EcPoint, ScalarPoint};
+
+pub(crate) use halo2_base::{halo2_proofs, halo2_proofs::halo2curves as halo2_curves};
+
+mod pcs;
+mod sumcheck;
+mod system;
+mod util;
 mod verifier;
 
 #[derive(Clone, Debug)]
-pub enum Error {
-}
+pub enum Error {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Protocol<C, L = loader::native::NativeLoader>
+pub struct Protocol<C>
 where
-    C: util::arithmetic::CurveAffine,
-    L: loader::Loader<C>,
+    C: CurveAffine,
 {
-    #[serde(bound(
-        serialize = "L::LoadedEcPoint: Serialize",
-        deserialize = "L::LoadedEcPoint: Deserialize<'de>"
-    ))]
     pub num_instance: Vec<usize>,
-    pub preprocessed: Vec<L::LoadedEcPoint>,
     pub num_witness: Vec<usize>,
-    // permutations & lookup
-
-    
     pub num_challenge: Vec<usize>,
-    pub evaluations: Vec<util::protocol::Query>,
-    pub queries: Vec<util::protocol::Query>,
+    pub num_vars: usize,
+
+    pub num_preprocess: usize,
+    pub constraint_expression: Expression<ScalarPoint<C>>,
+    pub opening_expression: Expression<ScalarPoint<C>>,
+    pub prep_perm_comm: Vec<EcPoint<C>>,
+
+    pub evaluations: Vec<Query>,
     // Minor customization
-    #[serde(bound(
-        serialize = "L::LoadedScalar: Serialize",
-        deserialize = "L::LoadedScalar: Deserialize<'de>"
-    ))]
-    pub transcript_initial_state: Option<L::LoadedScalar>,
-    pub instance_committing_key: Option<util::protocol::InstanceCommittingKey<C>>,
+    pub transcript_initial_state: Option<ScalarPoint<C>>,
 }

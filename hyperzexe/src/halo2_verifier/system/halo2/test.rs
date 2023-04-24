@@ -1,21 +1,22 @@
 #![allow(dead_code)]
 #![allow(clippy::all)]
-use crate::halo2_verifier::halo2_proofs::{
-    dev::MockProver,
-    plonk::{create_proof, verify_proof, Circuit, ProvingKey},
-    poly::{
-        commitment::{CommitmentScheme, Params, ParamsProver, Prover, Verifier},
-        VerificationStrategy,
+use crate::halo2_verifier::{
+    halo2_proofs::{
+        dev::MockProver,
+        plonk::{create_proof, verify_proof, Circuit, ProvingKey},
+        poly::{
+            commitment::{CommitmentScheme, Params, ParamsProver, Prover, Verifier},
+            VerificationStrategy,
+        },
+        transcript::{EncodedChallenge, TranscriptReadBuffer, TranscriptWriterBuffer},
     },
-    transcript::{EncodedChallenge, TranscriptReadBuffer, TranscriptWriterBuffer},
+    util::arithmetic::CurveAffine,
 };
-use crate::halo2_verifier::util::arithmetic::CurveAffine;
 use halo2_proofs::ff::FromUniformBytes;
 use rand_chacha::rand_core::RngCore;
 use std::{fs, io::Cursor};
 
 mod circuit;
-// mod ipa;
 mod kzg;
 
 pub use circuit::standard::StandardPlonk;
@@ -33,7 +34,7 @@ pub fn read_or_create_srs<'a, C: CurveAffine, P: ParamsProver<'a, C>>(
             let params = setup(k);
             params.write(&mut fs::File::create(path).unwrap()).unwrap();
             params
-        }
+        },
     }
 }
 
@@ -164,7 +165,10 @@ macro_rules! halo2_create_snark {
             loader::halo2::test::Snark, system::halo2::test::create_proof_checked, util::Itertools,
         };
 
-        let instances = $circuits.iter().map(|circuit| circuit.instances()).collect_vec();
+        let instances = $circuits
+            .iter()
+            .map(|circuit| circuit.instances())
+            .collect_vec();
         let proof = {
             #[allow(clippy::needless_borrow)]
             let instances = instances
@@ -192,7 +196,11 @@ macro_rules! halo2_create_snark {
             )
         };
 
-        Snark::new($protocol.clone(), instances.into_iter().flatten().collect_vec(), proof)
+        Snark::new(
+            $protocol.clone(),
+            instances.into_iter().flatten().collect_vec(),
+            proof,
+        )
     }};
 }
 
@@ -206,12 +214,17 @@ macro_rules! halo2_native_verify {
         $svk:expr,
         $dk:expr
     ) => {{
-        use $crate::halo2_verifier::halo2_proofs::poly::commitment::ParamsProver;
-        use $crate::halo2_verifier::verifier::PlonkVerifier;
+        use $crate::halo2_verifier::{
+            halo2_proofs::poly::commitment::ParamsProver, verifier::PlonkVerifier,
+        };
 
         let proof = <$plonk_verifier>::read_proof($svk, $protocol, $instances, $transcript);
-        assert!(<$plonk_verifier>::verify($svk, $dk, $protocol, $instances, &proof))
+        assert!(<$plonk_verifier>::verify(
+            $svk, $dk, $protocol, $instances, &proof
+        ))
     }};
 }
 
-pub(crate) use {halo2_create_snark, halo2_native_verify, halo2_prepare};
+pub(crate) use halo2_create_snark;
+pub(crate) use halo2_native_verify;
+pub(crate) use halo2_prepare;

@@ -1,54 +1,59 @@
-use crate::halo2_verifier::halo2_curves::bn256::{Bn256, Fq, Fr, G1Affine};
-use crate::halo2_verifier::halo2_proofs::{
-    circuit::{Layouter, SimpleFloorPlanner, Value},
-    plonk::{self, create_proof, verify_proof, Circuit, Column, ConstraintSystem, Instance},
-    poly::{
-        commitment::ParamsProver,
-        kzg::{
-            commitment::{KZGCommitmentScheme, ParamsKZG},
-            multiopen::{ProverSHPLONK, VerifierSHPLONK},
-            strategy::SingleStrategy,
-        },
-    },
-    transcript::{
-        Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
-    },
-};
-use crate::halo2_verifier::{
-    loader::{
-        self,
-        halo2::test::{Snark, SnarkWitness},
-        native::NativeLoader,
-    },
-    pcs::{
-        kzg::{
-            Bdfg21, Kzg, KzgAccumulator, KzgAs, KzgAsProvingKey, KzgAsVerifyingKey,
-            KzgSuccinctVerifyingKey, LimbsEncoding,
-        },
-        AccumulationScheme, AccumulationSchemeProver,
-    },
-    system::halo2::{
-        test::{
-            kzg::{
-                halo2_kzg_config, halo2_kzg_create_snark, halo2_kzg_native_verify,
-                halo2_kzg_prepare, BITS, LIMBS,
+use crate::{
+    halo2_verifier::{
+        halo2_curves::bn256::{Bn256, Fr, G1Affine},
+        halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            plonk::{
+                self, create_proof, verify_proof, Circuit, Column, ConstraintSystem, Instance,
             },
-            StandardPlonk,
+            poly::{
+                commitment::ParamsProver,
+                kzg::{
+                    commitment::{KZGCommitmentScheme, ParamsKZG},
+                    multiopen::{ProverSHPLONK, VerifierSHPLONK},
+                    strategy::SingleStrategy,
+                },
+            },
+            transcript::{
+                Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer,
+                TranscriptWriterBuffer,
+            },
         },
-        transcript::halo2::{ChallengeScalar, PoseidonTranscript as GenericPoseidonTranscript},
+        loader::{
+            self,
+            halo2::test::{Snark, SnarkWitness},
+            native::NativeLoader,
+        },
+        pcs::{
+            kzg::{
+                Bdfg21, Kzg, KzgAccumulator, KzgAs, KzgAsProvingKey, KzgAsVerifyingKey,
+                KzgSuccinctVerifyingKey, LimbsEncoding,
+            },
+            AccumulationScheme, AccumulationSchemeProver,
+        },
+        system::halo2::{
+            test::{
+                kzg::{
+                    halo2_kzg_config, halo2_kzg_create_snark, halo2_kzg_native_verify,
+                    halo2_kzg_prepare, BITS, LIMBS,
+                },
+                StandardPlonk,
+            },
+            transcript::halo2::{ChallengeScalar, PoseidonTranscript as GenericPoseidonTranscript},
+        },
+        util::{arithmetic::fe_to_limbs, Itertools},
+        verifier::{self, PlonkVerifier},
     },
-    util::{arithmetic::fe_to_limbs, Itertools},
-    verifier::{self, PlonkVerifier},
+    EccChip, ScalarChip,
 };
 use ark_std::{end_timer, start_timer};
-use halo2_base::{Context, ContextParams};
-use halo2_ecc::ecc::EccChip;
+use halo2_base::{gates::flex_gate::FlexGateConfig, Context, ContextParams};
 use halo2_ecc::fields::fp::FpConfig;
 use paste::paste;
 use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::{
+    fs::File,
     io::{Cursor, Read, Write},
     rc::Rc,
 };
@@ -58,8 +63,8 @@ const RATE: usize = 4;
 const R_F: usize = 8;
 const R_P: usize = 60;
 
-type BaseFieldEccChip = halo2_ecc::ecc::BaseFieldEccChip<G1Affine>;
-type Halo2Loader<'a> = loader::halo2::Halo2Loader<'a, G1Affine, BaseFieldEccChip>;
+type Halo2Loader<'a> =
+    loader::halo2::Halo2Loader<'a, G1Affine, EccChip<G1Affine>, ScalarChip<G1Affine>>;
 type PoseidonTranscript<L, S> = GenericPoseidonTranscript<G1Affine, L, S, T, RATE, R_F, R_P>;
 
 type Pcs = Kzg<Bn256, Bdfg21>;
@@ -91,7 +96,8 @@ pub fn load_verify_circuit_degree() -> u32 {
 
 #[derive(Clone)]
 pub struct Halo2VerifierCircuitConfig {
-    pub base_field_config: halo2_ecc::fields::fp::FpConfig<Fr, Fq>,
+    pub ecc_config: EccChip<G1Affine>,
+    pub scalar_field_config: ScalarChip<G1Affine>,
     pub instance: Column<Instance>,
 }
 
@@ -105,7 +111,16 @@ impl Halo2VerifierCircuitConfig {
             "For now we fix limb_bits = {}, otherwise change code",
             BITS
         );
-        let base_field_config = halo2_ecc::fields::fp::FpConfig::configure(
+        let gate = FlexGateConfig::configure(
+            meta,
+            params.strategy,
+            &[params.num_advice],
+            params.num_fixed,
+            0,
+            params.degree as usize,
+        );
+        let ecc_config = EccChip::<G1Affine>::construct(gate);
+        let scalar_field_config = ScalarChip::<G1Affine>::configure(
             meta,
             params.strategy,
             &[params.num_advice],
@@ -114,7 +129,7 @@ impl Halo2VerifierCircuitConfig {
             params.lookup_bits,
             params.limb_bits,
             params.num_limbs,
-            halo2_base::utils::modulus::<Fq>(),
+            halo2_base::utils::modulus::<Fr>(),
             0,
             params.degree as usize,
         );
@@ -122,7 +137,11 @@ impl Halo2VerifierCircuitConfig {
         let instance = meta.instance_column();
         meta.enable_equality(instance);
 
-        Self { base_field_config, instance }
+        Self {
+            scalar_field_config,
+            ecc_config,
+            instance,
+        }
     }
 }
 
@@ -137,7 +156,10 @@ pub fn accumulate<'a>(
         instances
             .iter()
             .map(|instances| {
-                instances.iter().map(|instance| loader.assign_scalar(*instance)).collect_vec()
+                instances
+                    .iter()
+                    .map(|instance| loader.assign_scalar(*instance))
+                    .collect_vec()
             })
             .collect_vec()
     };
@@ -212,7 +234,9 @@ impl Accumulation {
         };
 
         let KzgAccumulator { lhs, rhs } = accumulator;
-        let instances = [lhs.x, lhs.y, rhs.x, rhs.y].map(fe_to_limbs::<_, _, LIMBS, BITS>).concat();
+        let instances = [lhs.x, lhs.y, rhs.x, rhs.y]
+            .map(fe_to_limbs::<_, _, LIMBS, BITS>)
+            .concat();
 
         Self {
             svk,
@@ -305,7 +329,11 @@ impl Circuit<Fr> for Accumulation {
     fn without_witnesses(&self) -> Self {
         Self {
             svk: self.svk,
-            snarks: self.snarks.iter().map(SnarkWitness::without_witnesses).collect(),
+            snarks: self
+                .snarks
+                .iter()
+                .map(SnarkWitness::without_witnesses)
+                .collect(),
             instances: Vec::new(),
             as_vk: self.as_vk,
             as_proof: Value::unknown(),
@@ -324,7 +352,16 @@ impl Circuit<Fr> for Accumulation {
             "For now we fix limb_bits = {}, otherwise change code",
             BITS
         );
-        let base_field_config = FpConfig::configure(
+        let gate = FlexGateConfig::configure(
+            meta,
+            params.strategy,
+            &[params.num_advice],
+            params.num_fixed,
+            0,
+            params.degree as usize,
+        );
+        let ecc_config = EccChip::<G1Affine>::construct(gate);
+        let scalar_field_config = FpConfig::configure(
             meta,
             params.strategy,
             &[params.num_advice],
@@ -333,7 +370,7 @@ impl Circuit<Fr> for Accumulation {
             params.lookup_bits,
             params.limb_bits,
             params.num_limbs,
-            halo2_base::utils::modulus::<Fq>(),
+            halo2_base::utils::modulus::<Fr>(),
             0,
             params.degree as usize,
         );
@@ -341,7 +378,11 @@ impl Circuit<Fr> for Accumulation {
         let instance = meta.instance_column();
         meta.enable_equality(instance);
 
-        Self::Config { base_field_config, instance }
+        Self::Config {
+            ecc_config,
+            scalar_field_config,
+            instance,
+        }
     }
 
     fn synthesize(
@@ -350,7 +391,9 @@ impl Circuit<Fr> for Accumulation {
         mut layouter: impl Layouter<Fr>,
     ) -> Result<(), plonk::Error> {
         let mut layouter = layouter.namespace(|| "aggregation");
-        config.base_field_config.load_lookup_table(&mut layouter)?;
+        config
+            .scalar_field_config
+            .load_lookup_table(&mut layouter)?;
 
         // Need to trick layouter to skip first pass in get shape mode
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
@@ -365,38 +408,49 @@ impl Circuit<Fr> for Accumulation {
                 let ctx = Context::new(
                     region,
                     ContextParams {
-                        max_rows: config.base_field_config.range.gate.max_rows,
+                        max_rows: config.scalar_field_config.range.gate.max_rows,
                         num_context_ids: 1,
-                        fixed_columns: config.base_field_config.range.gate.constants.clone(),
+                        fixed_columns: config.scalar_field_config.range.gate.constants.clone(),
                     },
                 );
 
-                let loader =
-                    Halo2Loader::new(EccChip::construct(config.base_field_config.clone()), ctx);
-                let KzgAccumulator { lhs, rhs } =
-                    accumulate(&self.svk, &loader, &self.snarks, &self.as_vk, self.as_proof());
+                let loader = Halo2Loader::new(config.ecc_config, config.scalar_field_config, ctx);
+                let KzgAccumulator { lhs, rhs } = accumulate(
+                    &self.svk,
+                    &loader,
+                    &self.snarks,
+                    &self.as_vk,
+                    self.as_proof(),
+                );
 
                 let lhs = lhs.assigned();
                 let rhs = rhs.assigned();
                 // REQUIRED STEP
-                config.base_field_config.finalize(&mut loader.ctx_mut());
+                config.scalar_field_config.finalize(&mut loader.ctx_mut());
 
-                let instances: Vec<_> = lhs
-                    .x
-                    .truncation
-                    .limbs
-                    .iter()
-                    .chain(lhs.y.truncation.limbs.iter())
-                    .chain(rhs.x.truncation.limbs.iter())
-                    .chain(rhs.y.truncation.limbs.iter())
-                    .map(|assigned| assigned.cell().clone())
-                    .collect();
+                // let instances: Vec<_> = lhs
+                //     .x
+                //     .truncation
+                //     .limbs
+                //     .iter()
+                //     .chain(lhs.y.truncation.limbs.iter())
+                //     .chain(rhs.x.truncation.limbs.iter())
+                //     .chain(rhs.y.truncation.limbs.iter())
+                //     .map(|assigned| assigned.cell().clone())
+                //     .collect();
+                let instances = vec![
+                    lhs.x.cell().clone(),
+                    lhs.y.cell().clone(),
+                    rhs.x.cell().clone(),
+                    rhs.y.cell().clone(),
+                ];
                 assigned_instances = Some(instances);
 
                 Ok(())
             },
         )?;
-        // TODO: use less instances by following Scroll's strategy of keeping only last bit of y coordinate
+        // TODO: use less instances by following Scroll's strategy of keeping only last
+        // bit of y coordinate
         let mut layouter = layouter.namespace(|| "expose");
         for (i, cell) in assigned_instances.unwrap().into_iter().enumerate() {
             layouter.constrain_instance(cell, config.instance, i)?;
@@ -445,14 +499,16 @@ macro_rules! test {
 }
 
 test!(
-    // create aggregation circuit A that aggregates two simple snarks {B,C}, then verify proof of this aggregation circuit A
+    // create aggregation circuit A that aggregates two simple snarks {B,C}, then verify proof of
+    // this aggregation circuit A
     zk_aggregate_two_snarks,
     21,
     halo2_kzg_config!(true, 1, Some(Accumulation::accumulator_indices())),
     Accumulation::two_snark()
 );
 test!(
-    // create aggregation circuit A that aggregates two copies of same aggregation circuit B that aggregates two simple snarks {C, D}, then verifies proof of this aggregation circuit A
+    // create aggregation circuit A that aggregates two copies of same aggregation circuit B that
+    // aggregates two simple snarks {C, D}, then verifies proof of this aggregation circuit A
     zk_aggregate_two_snarks_with_accumulator,
     22, // 22 = 21 + 1 since there are two copies of circuit B
     halo2_kzg_config!(true, 1, Some(Accumulation::accumulator_indices())),
@@ -478,8 +534,10 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
 
     let proof_time = start_timer!(|| "create proof");
     // usual shenanigans to turn nested Vec into nested slice
-    let instances0: Vec<Vec<Vec<Fr>>> =
-        circuits.iter().map(|circuit| T::instances(circuit)).collect_vec();
+    let instances0: Vec<Vec<Vec<Fr>>> = circuits
+        .iter()
+        .map(|circuit| T::instances(circuit))
+        .collect_vec();
     let instances1: Vec<Vec<&[Fr]>> = instances0
         .iter()
         .map(|instances| instances.iter().map(Vec::as_slice).collect_vec())
@@ -494,7 +552,7 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
                 let mut buf = vec![];
                 file.read_to_end(&mut buf).unwrap();
                 buf
-            }
+            },
             Err(_) => {
                 let mut transcript = PoseidonTranscript::<NativeLoader, Vec<u8>>::init(Vec::new());
                 create_proof::<KZGCommitmentScheme<_>, ProverSHPLONK<_>, _, _, _, _>(
@@ -511,7 +569,7 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
                     .expect(format!("{:?} should exist", path).as_str());
                 file.write_all(&proof).unwrap();
                 proof
-            }
+            },
         }
     };
     end_timer!(proof_time);
@@ -537,82 +595,87 @@ pub fn create_snark<T: TargetCircuit>() -> (ParamsKZG<Bn256>, Snark<G1Affine>) {
     }
     end_timer!(verify_time);
 
-    (params, Snark::new(protocol.clone(), instances0.into_iter().flatten().collect_vec(), proof))
+    (
+        params,
+        Snark::new(
+            protocol.clone(),
+            instances0.into_iter().flatten().collect_vec(),
+            proof,
+        ),
+    )
 }
 
-/*
-pub mod zkevm {
-    use super::*;
-    use zkevm_circuit_benchmarks::evm_circuit::TestCircuit as EvmCircuit;
-    use zkevm_circuits::evm_circuit::witness::RwMap;
-    use zkevm_circuits::state_circuit::StateCircuit;
-
-    impl TargetCircuit for EvmCircuit<Fr> {
-        const TARGET_CIRCUIT_K: u32 = 18;
-        const PUBLIC_INPUT_SIZE: usize = 0; // (Self::TARGET_CIRCUIT_K * 2) as usize;
-        const N_PROOFS: usize = 1;
-        const NAME: &'static str = "zkevm";
-
-        fn default_circuit() -> Self {
-            Self::default()
-        }
-        fn instances(&self) -> Vec<Vec<Fr>> {
-            vec![]
-        }
-    }
-
-    fn evm_verify_circuit() -> Accumulation {
-        let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
-        println!("creating aggregation circuit");
-        Accumulation::new(&params, [evm_snark])
-    }
-
-    test!(
-        bench_evm_circuit,
-        load_verify_circuit_degree(),
-        halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
-        evm_verify_circuit()
-    );
-
-    impl TargetCircuit for StateCircuit<Fr> {
-        const TARGET_CIRCUIT_K: u32 = 18;
-        const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
-        const N_PROOFS: usize = 1;
-        const NAME: &'static str = "state-circuit";
-
-        fn default_circuit() -> Self {
-            StateCircuit::<Fr>::new(Fr::default(), RwMap::default(), 1)
-        }
-        fn instances(&self) -> Vec<Vec<Fr>> {
-            self.instance()
-        }
-    }
-
-    fn state_verify_circuit() -> Accumulation {
-        let (params, snark) = create_snark::<StateCircuit<Fr>>();
-        println!("creating aggregation circuit");
-        Accumulation::new(&params, [snark])
-    }
-
-    test!(
-        bench_state_circuit,
-        load_verify_circuit_degree(),
-        halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
-        state_verify_circuit()
-    );
-
-    fn evm_and_state_aggregation_circuit() -> Accumulation {
-        let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
-        let (_, state_snark) = create_snark::<StateCircuit<Fr>>();
-        println!("creating aggregation circuit");
-        Accumulation::new(&params, [evm_snark, state_snark])
-    }
-
-    test!(
-        bench_evm_and_state,
-        load_verify_circuit_degree(),
-        halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
-        evm_and_state_aggregation_circuit()
-    );
-}
-*/
+// pub mod zkevm {
+// use super::*;
+// use zkevm_circuit_benchmarks::evm_circuit::TestCircuit as EvmCircuit;
+// use zkevm_circuits::evm_circuit::witness::RwMap;
+// use zkevm_circuits::state_circuit::StateCircuit;
+//
+// impl TargetCircuit for EvmCircuit<Fr> {
+// const TARGET_CIRCUIT_K: u32 = 18;
+// const PUBLIC_INPUT_SIZE: usize = 0; // (Self::TARGET_CIRCUIT_K * 2) as usize;
+// const N_PROOFS: usize = 1;
+// const NAME: &'static str = "zkevm";
+//
+// fn default_circuit() -> Self {
+// Self::default()
+// }
+// fn instances(&self) -> Vec<Vec<Fr>> {
+// vec![]
+// }
+// }
+//
+// fn evm_verify_circuit() -> Accumulation {
+// let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
+// println!("creating aggregation circuit");
+// Accumulation::new(&params, [evm_snark])
+// }
+//
+// test!(
+// bench_evm_circuit,
+// load_verify_circuit_degree(),
+// halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
+// evm_verify_circuit()
+// );
+//
+// impl TargetCircuit for StateCircuit<Fr> {
+// const TARGET_CIRCUIT_K: u32 = 18;
+// const PUBLIC_INPUT_SIZE: usize = 0; //(Self::TARGET_CIRCUIT_K * 2) as usize;
+// const N_PROOFS: usize = 1;
+// const NAME: &'static str = "state-circuit";
+//
+// fn default_circuit() -> Self {
+// StateCircuit::<Fr>::new(Fr::default(), RwMap::default(), 1)
+// }
+// fn instances(&self) -> Vec<Vec<Fr>> {
+// self.instance()
+// }
+// }
+//
+// fn state_verify_circuit() -> Accumulation {
+// let (params, snark) = create_snark::<StateCircuit<Fr>>();
+// println!("creating aggregation circuit");
+// Accumulation::new(&params, [snark])
+// }
+//
+// test!(
+// bench_state_circuit,
+// load_verify_circuit_degree(),
+// halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
+// state_verify_circuit()
+// );
+//
+// fn evm_and_state_aggregation_circuit() -> Accumulation {
+// let (params, evm_snark) = create_snark::<EvmCircuit<Fr>>();
+// let (_, state_snark) = create_snark::<StateCircuit<Fr>>();
+// println!("creating aggregation circuit");
+// Accumulation::new(&params, [evm_snark, state_snark])
+// }
+//
+// test!(
+// bench_evm_and_state,
+// load_verify_circuit_degree(),
+// halo2_kzg_config!(true, 1, Accumulation::accumulator_indices()),
+// evm_and_state_aggregation_circuit()
+// );
+// }

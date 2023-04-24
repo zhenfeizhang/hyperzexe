@@ -77,7 +77,11 @@ pub struct Snark {
 
 impl Snark {
     pub fn new(protocol: Protocol<G1Affine>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) -> Self {
-        Self { protocol, instances, proof }
+        Self {
+            protocol,
+            instances,
+            proof,
+        }
     }
     pub fn protocol(&self) -> &Protocol<G1Affine> {
         &self.protocol
@@ -149,7 +153,10 @@ pub fn aggregate<'a, 'b>(
         instances
             .iter()
             .map(|instances| {
-                instances.iter().map(|instance| loader.assign_scalar(*instance)).collect_vec()
+                instances
+                    .iter()
+                    .map(|instance| loader.assign_scalar(*instance))
+                    .collect_vec()
             })
             .collect_vec()
     };
@@ -210,7 +217,10 @@ pub fn recursive_aggregate<'a, 'b>(
         instances
             .iter()
             .map(|instances| {
-                instances.iter().map(|instance| loader.assign_scalar(*instance)).collect_vec()
+                instances
+                    .iter()
+                    .map(|instance| loader.assign_scalar(*instance))
+                    .collect_vec()
             })
             .collect_vec()
     };
@@ -240,9 +250,13 @@ pub fn recursive_aggregate<'a, 'b>(
     let mut accs = {
         let mut transcript =
             PoseidonTranscript::<Rc<Halo2Loader>, _, _>::new(loader, recursive_snark.proof());
-        let proof =
-            Plonk::read_proof(svk, &recursive_snark.protocol, &prev_instances, &mut transcript)
-                .unwrap();
+        let proof = Plonk::read_proof(
+            svk,
+            &recursive_snark.protocol,
+            &prev_instances,
+            &mut transcript,
+        )
+        .unwrap();
         let mut accs = Plonk::succinct_verify_or_dummy(
             svk,
             &recursive_snark.protocol,
@@ -252,10 +266,12 @@ pub fn recursive_aggregate<'a, 'b>(
         )
         .unwrap();
         for acc in accs.iter_mut() {
-            (*acc).lhs =
-                loader.ec_point_select(&accumulators[0].lhs, &acc.lhs, &use_dummy).unwrap();
-            (*acc).rhs =
-                loader.ec_point_select(&accumulators[0].rhs, &acc.rhs, &use_dummy).unwrap();
+            (*acc).lhs = loader
+                .ec_point_select(&accumulators[0].lhs, &acc.lhs, &use_dummy)
+                .unwrap();
+            (*acc).rhs = loader
+                .ec_point_select(&accumulators[0].rhs, &acc.rhs, &use_dummy)
+                .unwrap();
         }
         accs
     };
@@ -336,10 +352,15 @@ impl AggregationCircuit {
         };
 
         let KzgAccumulator { lhs, rhs } = accumulator;
-        let mut instances =
-            [lhs.x, lhs.y, rhs.x, rhs.y].map(fe_to_limbs::<_, _, LIMBS, BITS>).concat();
+        let mut instances = [lhs.x, lhs.y, rhs.x, rhs.y]
+            .map(fe_to_limbs::<_, _, LIMBS, BITS>)
+            .concat();
         if expose_target_instances {
-            instances.extend(snarks.iter().flat_map(|snark| snark.instances.iter().flatten()));
+            instances.extend(
+                snarks
+                    .iter()
+                    .flat_map(|snark| snark.instances.iter().flatten()),
+            );
         }
 
         Self {
@@ -375,7 +396,7 @@ impl AggregationCircuit {
         layouter: &mut impl Layouter<Fr>,
         instance_equalities: Vec<(usize, usize)>,
     ) -> Result<Vec<AssignedValue<Fr>>, plonk::Error> {
-        config.base_field_config.load_lookup_table(layouter)?;
+        config.scalar_field_config.load_lookup_table(layouter)?;
 
         // Need to trick layouter to skip first pass in get shape mode
         let using_simple_floor_planner = true;
@@ -388,7 +409,8 @@ impl AggregationCircuit {
                     first_pass = false;
                     return Ok(());
                 }
-                let ctx = config.base_field_config.new_context(region);
+                //? What is this?
+                let ctx = config.scalar_field_chip.new_context(region);
 
                 let loader = Halo2Loader::new(&config.base_field_config, ctx);
                 let instances = aggregate(
@@ -423,7 +445,11 @@ impl Circuit<Fr> for AggregationCircuit {
     fn without_witnesses(&self) -> Self {
         Self {
             svk: self.svk,
-            snarks: self.snarks.iter().map(SnarkWitness::without_witnesses).collect(),
+            snarks: self
+                .snarks
+                .iter()
+                .map(SnarkWitness::without_witnesses)
+                .collect(),
             instances: Vec::new(),
             as_vk: self.as_vk,
             as_proof: Value::unknown(),
@@ -449,7 +475,8 @@ impl Circuit<Fr> for AggregationCircuit {
         let config_instance = config.instance.clone();
         let assigned_instances = self.synthesize_proof(config, &mut layouter, vec![])?;
         Ok({
-            // TODO: use less instances by following Scroll's strategy of keeping only last bit of y coordinate
+            // TODO: use less instances by following Scroll's strategy of keeping only last
+            // bit of y coordinate
             let mut layouter = layouter.namespace(|| "expose");
             for (i, assigned_instance) in assigned_instances.iter().enumerate() {
                 layouter.constrain_instance(
@@ -483,7 +510,7 @@ pub fn gen_vk<ConcreteCircuit: Circuit<Fr>>(
                 .expect("Reading vkey should not fail");
             end_timer!(read_time);
             vk
-        }
+        },
         Err(_) => {
             let vk_time = start_timer!(|| "vkey");
             let vk = keygen_vk(params, circuit).unwrap();
@@ -492,7 +519,7 @@ pub fn gen_vk<ConcreteCircuit: Circuit<Fr>>(
             println!("Writing vkey to {}", path);
             vk.write(&mut f).unwrap();
             vk
-        }
+        },
     }
     #[cfg(not(feature = "serialize"))]
     {
@@ -518,7 +545,7 @@ pub fn gen_pk<ConcreteCircuit: Circuit<Fr>>(
                 .expect("Reading pkey should not fail");
             end_timer!(read_time);
             pk
-        }
+        },
         Err(_) => {
             let vk = gen_vk::<ConcreteCircuit>(params, circuit, name);
             let pk_time = start_timer!(|| "pkey");
@@ -528,7 +555,7 @@ pub fn gen_pk<ConcreteCircuit: Circuit<Fr>>(
             println!("Writing pkey to {}", path);
             pk.write(&mut f).unwrap();
             pk
-        }
+        },
     }
     #[cfg(not(feature = "serialize"))]
     {
@@ -587,7 +614,10 @@ pub fn write_instances(instances: &Vec<Vec<Vec<Fr>>>, path: &str) {
             circuit_instances
                 .iter()
                 .map(|instance_column| {
-                    instance_column.iter().map(|x| fe_to_biguint(x).to_str_radix(16)).collect_vec()
+                    instance_column
+                        .iter()
+                        .map(|x| fe_to_biguint(x).to_str_radix(16))
+                        .collect_vec()
                 })
                 .collect_vec(),
         );
@@ -622,12 +652,18 @@ pub fn create_snark_shplonk<T: TargetCircuit>(
             .with_num_proof(T::N_PROOFS)
             .with_accumulator_indices(accumulator_indices)
     } else {
-        Config::kzg(KZG_QUERY_INSTANCE).set_zk(true).with_num_proof(T::N_PROOFS)
+        Config::kzg(KZG_QUERY_INSTANCE)
+            .set_zk(true)
+            .with_num_proof(T::N_PROOFS)
     };
 
     let pk = gen_pk(params, &circuits[0], T::name().as_str());
-    // num_instance[i] is length of the i-th instance columns in circuit 0 (all circuits should have same shape of instances)
-    let num_instance = instances[0].iter().map(|instance_column| instance_column.len()).collect();
+    // num_instance[i] is length of the i-th instance columns in circuit 0 (all
+    // circuits should have same shape of instances)
+    let num_instance = instances[0]
+        .iter()
+        .map(|instance_column| instance_column.len())
+        .collect();
     let protocol = compile(params, pk.get_vk(), config.with_num_instance(num_instance));
 
     // usual shenanigans to turn nested Vec into nested slice
@@ -714,5 +750,9 @@ pub fn create_snark_shplonk<T: TargetCircuit>(
     }
     end_timer!(verify_time);
 
-    Snark::new(protocol.clone(), instances.into_iter().flatten().collect_vec(), proof)
+    Snark::new(
+        protocol.clone(),
+        instances.into_iter().flatten().collect_vec(),
+        proof,
+    )
 }

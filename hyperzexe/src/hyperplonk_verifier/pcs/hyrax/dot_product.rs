@@ -3,7 +3,6 @@ use crate::halo2_verifier::{loader::Loader, system::halo2::transcript};
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 struct DotProductProof<L> {
-    blind_eval: L::LoadedScalar,
     Qd: L::LoadedEcPoint,
     Ghat_d: L::LoadedEcPoint,
     z1: L::LoadedScalar,
@@ -12,9 +11,9 @@ struct DotProductProof<L> {
     c: L::LoadedScalar,
 }
 
+#[allow(non_snake_case)]
 impl DotProductProof<L: Loader> {
-    #[allow(non_snake_case)]
-    fn read<T: TranscriptRead<C, L>>(n: usize, transcript: &mut T) -> Self {
+    fn read_proof<T: TranscriptRead<C, L>>(n: usize, transcript: &mut T) -> Self {
         bulletproof = BulletReductionProof::read(n, transcript);
         let Qd = transcript.read_ec_point().unwrap();
         let Ghat_d = transcript.read_ec_point().unwrap();

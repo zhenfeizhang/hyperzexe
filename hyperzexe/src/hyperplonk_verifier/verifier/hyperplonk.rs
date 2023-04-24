@@ -2,21 +2,23 @@ use std::marker::PhantomData;
 
 use halo2_proofs::curves::CurveAffine;
 
-use crate::{hyperplonk_verifier::Protocol, halo2_verifier::util::transcript::TranscriptRead};
+use crate::{hyperplonk_verifier::{Protocol, pcs::OpenScheme}, halo2_verifier::util::transcript::TranscriptRead};
 
 use super::HyperPlonkVerifier;
 
-pub struct HyperPlonk<PCS>(PhantomData<(PCS)>);
+pub struct HyperPlonk<PCS, SC>(PhantomData<(PCS, SC)>);
 
-impl<C, L, PCS> HyperPlonkVerifier<C, L, PCS> for HyperPlonk<PCS>
+impl<C, L, PCS, SC> HyperPlonkVerifier<C, L, PCS, SC> for HyperPlonk<PCS, SC>
 where
     C: CurveAffine,
     L: Loader<C>,
+    PCS: OpenScheme<C, L>,
+    SC:
 {
-    type Proof = HyperPlonkProof<C, L, PCS>;
+    type Proof = HyperPlonkProof<C, L, PCS, SC>;
 
     fn read_proof<T>(
-        svk: &PCS::SuccinctVerifyingKey,
+        vk: &PCS::VerifyingKey,
         protocol: &Protocol<C, L>,
         instances: &[Vec<L::LoadedScalar>],
         transcript: &mut T,
@@ -24,16 +26,45 @@ where
     where
         T: TranscriptRead<C, L>,
     {
-        PlonkProof::read::<T, AE>(svk, protocol, instances, transcript)
+        HyperPlonkProof::read_proof::<T>(vk, protocol, instances, transcript)
     }
 
     fn verify(
-        svk: &<PCS>::SuccinctVerifyingKey,
+        vk: &PCS::VerifyingKey,
         protocol: &Protocol<C, L>,
         instances: &[Vec<<L>::LoadedScalar>],
         proof: &Self::Proof,
-    ) -> <PCS>::Output {
-        todo!()
+    ) -> () {
+        let loader = proof.eta.loader();
+        let constraint_sum_check_msgs = proof.constraint_sum_check_msgs.iter().map(|x| x.as_slice()).collect::<Vec<_>>();
+        SC::verify(
+            protocol.num_vars,
+            protocol.constraint_expression,
+            instances,
+            &constraint_sum_check_msgs,
+            &proof.challenges,
+            &proof.y,
+            loader.load_zero(),
+            &proof.intermediate_evals,
+            &proof.x,
+        );
+        let intermediate_evals = proof.intermediate_evals[protocol.num_instance.len()..];
+        let powers_of_eta = proof.eta.powers(intermediate_evals.len());
+        let random_combined_eval = loader.sum_products(&powers_of_eta.iter().zip(intermediate_evals.iter().rev()).collect_vec());
+        let opening_sum_check_msgs = proof.opening_sum_check_msgs.iter().map(|x| x.as_slice()).collect::<Vec<_>>();
+        let final_evals = proof.pcs....
+        SC::verify(
+            protocol.num_vars,
+            protocol.opening_expression,
+            instances,
+            &opening_sum_check_msgs,
+            &proof.challenges,
+            &proof.x,
+            random_combined_eval,
+            &final_evals,
+            &proof.z,
+        );
+        PCS::verify(vk, &proof.pcs);
     }
 }
 
@@ -46,19 +77,28 @@ where
     pub witnesses: Vec<L::LoadedEcPoint>,
     pub challenges: Vec<L::LoadedScalar>,
     pub lookup_count: L::LoadedScalar,
-    pub lookup_permute_intermediate: L::LoadedEcPoint,
-    pub beta, gamma, alpha, eta: L::LoadedScalar,
-    pub evaluations: Vec<L::LoadedScalar>,
+    pub lookup_perm_intermediate: L::LoadedEcPoint,
+    pub beta: L::LoadedScalar,
+    pub gamma: L::LoadedScalar,
+    pub alpha: L::LoadedScalar,
+    pub y: Vec<L::LoadedScalar>,
+    pub constraint_sum_check_msgs: Vec<Vec<L::LoadedScalar>>,
+    pub x: Vec<L::LoadedScalar>,
+    pub intermediate_evals: Vec<L::LoadedScalar>,
+    pub eta: L::LoadedScalar,
+    pub opening_sum_check_msgs: Vec<Vec<L::LoadedScalar>>,
+    pub z: L::LoadedScalar,
     pub pcs: PCS::BatchProof,
 }
 
 impl<C, L, PCS> HyperPlonkProof<C, L, PCS>
 where
+    PCS: OpenScheme<C, L>,
     C: CurveAffine,
     L: Loader<C>,
 {
-    pub fn read<T>(
-        svk: &PCS::SuccinctVerifyingKey,
+    pub fn read_proof<T>(
+        svk: &PCS::VerifyingKey,
         protocol: &Protocol<C, L>,
         instances: &[Vec<L::LoadedScalar>],
         transcript: &mut T,
@@ -88,7 +128,7 @@ where
                 .iter()
                 .zip(protocol.num_challenge.iter())
                 .map(|(&n, &m)| {
-                    (transcript.read_n_ec_points(n).unwrap(), transcript.squeeze_n_challenges(m))
+                    (transcript.read_n_ec_points(compute_comm_len(n)).unwrap(), transcript.squeeze_n_challenges(m))
                 })
                 .unzip();
 
@@ -104,34 +144,79 @@ where
 
         let gamma = transcript.squeeze_challenge();
 
-        let lookup_permute_intermediate = transcript.read_ec_point().unwrap();
+        let lookup_perm_intermediate = transcript.read_ec_point().unwrap();
 
+        let alpha = transcript.squeeze_challenge();
+        let y = transcript.squeeze_challenge();
 
-        let evaluations = transcript.read_n_scalars(protocol.evaluations.len()).unwrap();
+        let (constraint_sum_check_msgs, x) = SC::read(transcript);
 
-        let pcs = MOS::read_proof(svk, &Self::empty_queries(protocol), transcript);
+        // let constraint_sum_check_msgs = Vec::new();
 
-        let old_accumulators = protocol
-            .accumulator_indices
-            .iter()
-            .map(|accumulator_indices| {
-                AE::from_repr(
-                    &accumulator_indices.iter().map(|&(i, j)| &instances[i][j]).collect_vec(),
-                )
-                .unwrap()
-            })
-            .collect_vec();
+        // let mut x = Vec::with_capacity(protocol.num_vars);
+        // for i in 0..protocol.num_vars {
+        //     constraint_sum_check_msgs.push(transcript.read_n_scalars(protocol.constraint_expression.degree())?);
+        //     x.push(transcript.squeeze_challenge());
+        // }
 
-        Self {
-            committed_instances,
+        let intermediate_evals = transcript.read_n_scalars(protocol.num_vars.num_intermediate_evals)?;
+        let eta = transcript.squeeze_challenge();
+
+        let (opening_sum_check_msgs, z) = SC::read(transcript);
+        // let mut z = Vec::with_capacity(protocol.num_vars);
+        // let mut opening_sum_check_msgs = Vec::with_capacity(protocol.num_vars);
+        // for i in 0..protocol.num_vars {
+        //     opening_sum_check_msgs.push(transcript.read_n_scalars(protocol.opening_expression.degree())?);
+        //     z.push(transcript.squeeze_challenge());
+        // }
+
+        let evals = Vec::new();
+        evals.extend(vec![loader.load_zero(); protocol.num_instance]);
+
+        let segment_groups = {
+            let mut offset = witness_offset;
+            let mut witness_offsets = Vec::new();
+            for num_witness_poly in pp.num_witness_polys.iter() {
+                witness_offsets.push(vec![(offset, *num_witness_poly)]);
+                offset += *num_witness_poly;
+            }
+            let mut res = vec![
+                vec![
+                    (preprocess_offset, pp.preprocess_polys.len()),
+                    (permutation_offset, permutation_polys.len()),
+                ]];
+            res.extend(witness_offsets);
+            res.extend(vec![
+                vec![(lookup_count_offset, lookup_count_polys.len())],
+                vec![
+                    (lookup_h_offset, lookup_h_polys.len()),
+                    (permutation_frac_offset, permutation_frac_polys.len()),
+                    (permutation_prod_offset, permutation_prod_polys.len()),
+                ],
+            ]);
+            res
+        };
+
+        let eval_groups = reorder_into_groups(evals, &segment_groups);
+        let pcs = PCS::read(svk, protocol, transcript, &eval_groups)?;
+
+        Ok(Self {
             witnesses,
             challenges,
-            quotients,
+            lookup_count,
+            lookup_perm_intermediate,
+            beta,
+            gamma,
+            alpha,
+            y,
+            constraint_sum_check_msgs,
+            x,
+            intermediate_evals,
+            eta,
+            opening_sum_check_msgs,
             z,
-            evaluations,
             pcs,
-            old_accumulators,
-        }
+        })
     }
 
     pub fn empty_queries(protocol: &Protocol<C, L>) -> Vec<pcs::Query<C::Scalar>> {
