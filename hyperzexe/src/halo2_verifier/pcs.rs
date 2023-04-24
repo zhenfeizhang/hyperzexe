@@ -10,7 +10,6 @@ use crate::halo2_verifier::{
 use rand::Rng;
 use std::fmt::Debug;
 
-// pub mod ipa;
 pub mod kzg;
 
 pub trait PolynomialCommitmentScheme<C, L>: Clone + Debug
@@ -30,7 +29,11 @@ pub struct Query<F: PrimeField, T = ()> {
 
 impl<F: PrimeField> Query<F> {
     pub fn with_evaluation<T>(self, eval: T) -> Query<F, T> {
-        Query { poly: self.poly, shift: self.shift, eval }
+        Query {
+            poly: self.poly,
+            shift: self.shift,
+            eval,
+        }
     }
 }
 
