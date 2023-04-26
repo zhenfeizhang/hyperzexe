@@ -1,16 +1,11 @@
 use halo2_proofs::{curves::CurveAffine, ff::PrimeField};
 use std::fmt::Debug;
 
-use crate::halo2_verifier::util::transcript::TranscriptRead;
+use crate::halo2_verifier::{loader::Loader, util::transcript::TranscriptRead};
+
+use super::Error;
 
 pub mod hyrax;
-
-#[derive(Clone, Debug)]
-pub struct Query<F: PrimeField, T = ()> {
-    pub poly: usize,
-    pub shift: F,
-    pub eval: T,
-}
 
 pub trait OpenScheme<C, L>
 where
@@ -25,7 +20,7 @@ where
 
     fn read_proof<T>(
         vk: &Self::VerifyingKey,
-        value: &L::LoadedScalar,
+        blind: &L::LoadedScalar,
         transcript: &mut T,
     ) -> Self::Proof
     where
@@ -35,6 +30,7 @@ where
         vk: &Self::VerifyingKey,
         commitments: &Self::Commitment,
         point: &Self::Point,
+        value: &L::LoadedScalar,
         proof: &Self::Proof,
     ) -> Result<Self::Output, Error>;
 }
@@ -45,9 +41,14 @@ where
     L: Loader<C>,
     OS: OpenScheme<C, L>,
 {
+    type VerifyingKey: Clone + Debug;
+    type Commitment: Clone + Debug;
+    type Point: Clone + Debug;
     type Proof: Clone + Debug;
+    type Output: Clone + Debug;
+
     fn read_proof<T>(
-        vk: &OS::VerifyingKey,
+        vk: &Self::VerifyingKey,
         num_vars: usize,
         eval_groups: &[&L::LoadedScalar],
         transcript: &mut T,
@@ -56,9 +57,11 @@ where
         T: TranscriptRead<C, L>;
 
     fn verify(
-        vk: &OS::VerifyingKey,
-        commitments: &[&OS::Commitment],
-        point: &L::LoadedScalar,
+        vk: &Self::VerifyingKey,
+        commitments: &[&Self::Commitment],
+        point: &Self::Point,
         batch_proof: &Self::Proof,
-    ) -> Result<OS::Output, Error>;
+    ) -> Result<Self::Output, Error>;
+
+    fn compute_comm_len(vk: &Self::VerifyingKey, total_len: usize) -> usize;
 }

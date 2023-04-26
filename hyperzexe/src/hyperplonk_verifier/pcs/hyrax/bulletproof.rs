@@ -1,17 +1,24 @@
-use halo2_base::utils::CurveAffineExt;
+use std::iter;
 
-use crate::{halo2_verifier::util::transcript::TranscriptRead, EcPoint};
+use halo2_proofs::curves::CurveAffine;
+
+use crate::{
+    halo2_verifier::{loader::Loader, util::transcript::TranscriptRead},
+    hyperplonk_verifier::Error,
+    EcPoint,
+};
 
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
-struct BulletReductionProof<C: CurveAffineExt> {
-    L_vec: Vec<EcPoint<C>>,
-    R_vec: Vec<EcPoint<C>>,
-    u_vec: Vec<EcPoint<C>>,
+pub(super) struct BulletReductionProof<C: CurveAffine, L: Loader<C>> {
+    L_vec: Vec<L::LoadedEcPoint>,
+    R_vec: Vec<L::LoadedEcPoint>,
+    u_vec: Vec<L::LoadedScalar>,
 }
 
-impl<C: CurveAffineExt> BulletReductionProof<C> {
-    fn read_proof<T: TranscriptRead<C>>(n: usize, transcript: &mut T) -> Self {
+#[allow(non_snake_case)]
+impl<C: CurveAffine, L: Loader<C>> BulletReductionProof<C, L> {
+    pub(super) fn read_proof<T: TranscriptRead<C, L>>(n: usize, transcript: &mut T) -> Self {
         let mut n = n;
         let mut L_vec = Vec::new();
         let mut R_vec = Vec::new();
@@ -31,6 +38,7 @@ impl<C: CurveAffineExt> BulletReductionProof<C> {
 
     fn verification_scalars(
         &self,
+        n: usize,
     ) -> Result<
         (
             Vec<L::LoadedEcPoint>,
@@ -39,10 +47,11 @@ impl<C: CurveAffineExt> BulletReductionProof<C> {
         ),
         Error,
     > {
-        let loader = u_vec[0].loader();
+        let loader = self.u_vec[0].loader();
         let lg_n = self.L_vec.len();
 
         // 2. Compute 1/(u_k...u_1) and 1/u_k, ..., 1/u_1
+        let mut challenges = self.u_vec.clone();
         let mut challenges_inv = self.u_vec.clone();
         L::batch_invert(challenges_inv.iter_mut());
         let allinv = loader.product(challenges_inv.iter());
@@ -70,31 +79,32 @@ impl<C: CurveAffineExt> BulletReductionProof<C> {
         Ok((challenges_sq, challenges_inv_sq, s))
     }
 
-    #[allow(non_snake_case)]
-    fn verify(
+    pub(super) fn verify(
         &self,
+        n: usize,
         a: &[L::LoadedScalar],
         Gamma: &L::LoadedEcPoint,
         G: &[L::LoadedEcPoint],
     ) -> Result<(), Error> {
-        let loader = a[0].loader();
-        let (u_sq, u_inv_sq, s) = self.verification_scalars()?;
+        let scalarLoader = a[0].loader();
+        let eccLoader = Gamma.loader();
+        let (u_sq, u_inv_sq, s) = self.verification_scalars(n)?;
 
-        let a_hat = loader.sum_products(a.iter().zip(s.iter));
-        let G_hat = loader.variable_base_msm(s.iter().zip(G.iter()));
+        let a_hat = scalarLoader.sum_products(a.iter().zip(s.iter));
+        let G_hat = eccLoader.variable_base_msm(s.iter().zip(G.iter()));
 
         let points = self
             .L_vec
             .iter()
             .chain(self.R_vec.iter())
-            .chain(once(Gamma));
+            .chain(iter::once(Gamma));
 
         let scalars = u_sq
             .iter()
             .chain(u_inv_sq.iter())
-            .chain(iter::once(loader.load_one()));
+            .chain(iter::once(scalarLoader.load_one()));
 
-        let Gamma_hat = loader.variable_base_msm(scalars.iter().zip(points.iter()));
+        let Gamma_hat = L::multi_scalar_multiplication(scalars.iter().zip(points.iter()));
 
         Ok((G_hat, Gamma_hat, a_hat))
     }

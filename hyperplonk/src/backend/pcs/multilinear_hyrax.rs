@@ -33,7 +33,7 @@ pub(crate) mod batching;
 mod commitments;
 mod dense_mlpoly;
 mod math;
-mod nizk;
+pub(crate) mod nizk;
 mod random;
 
 /// Hyrax Polynomial Commitment Scheme on multilinear polynomials
@@ -61,7 +61,7 @@ impl<C: CurveAffine> PolynomialCommitmentScheme<C::Scalar> for MultilinearHyraxP
     // Commitments and proofs
     type Commitment = HyraxCommitment<C>;
     type Proof = MultilinearHyraxProof<C>;
-    type BatchProof = HyraxBatchProof<C::Scalar, Self>;
+    type BatchProof = HyraxBatchProof<C>;
 
     /// Build SRS for testing.
     ///
@@ -239,7 +239,7 @@ impl<C: CurveAffine> PolynomialCommitmentScheme<C::Scalar> for MultilinearHyraxP
                 )));
             }
         }
-        let proof = multi_open_single_point_internal(
+        let proof = multi_open_single_point_internal::<C, Self>(
             prover_param,
             polynomials,
             &points[0],
@@ -272,6 +272,7 @@ impl<C: CurveAffine> PolynomialCommitmentScheme<C::Scalar> for MultilinearHyraxP
         verifier_param: &Self::VerifierParam,
         commitments: &[&Self::Commitment],
         points: &[Self::Point],
+        values: &[&[C::Scalar]],
         batch_proof: &Self::BatchProof,
         transcript: &mut impl TranscriptWrite<C, C::Scalar>,
     ) -> Result<bool, Error> {
@@ -283,10 +284,11 @@ impl<C: CurveAffine> PolynomialCommitmentScheme<C::Scalar> for MultilinearHyraxP
                 )));
             }
         }
-        batch_verify_single_point_internal(
+        batch_verify_single_point_internal::<C, Self>(
             verifier_param,
             commitments,
             &points[0],
+            values,
             batch_proof,
             transcript,
         )

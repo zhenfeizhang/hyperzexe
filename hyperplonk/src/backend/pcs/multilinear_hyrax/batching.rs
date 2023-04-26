@@ -20,18 +20,9 @@ use crate::{
     Error,
 };
 
-use super::{HyraxProverParam, HyraxVerifierParam};
+use super::{dense_mlpoly::MultilinearHyraxProof, HyraxProverParam, HyraxVerifierParam};
 
-/// A batch proof for polynomials open on a single point.
-#[derive(Clone, Debug)]
-pub struct HyraxBatchProof<F, PCS>
-where
-    F: Field,
-    PCS: PolynomialCommitmentScheme<F>,
-{
-    pub eval_groups: Vec<Vec<F>>,
-    pub proof: PCS::Proof,
-}
+pub type HyraxBatchProof<C> = MultilinearHyraxProof<C>;
 
 pub(crate) fn multi_open_single_point_internal<C, PCS>(
     prover_param: &PCS::ProverParam,
@@ -39,7 +30,7 @@ pub(crate) fn multi_open_single_point_internal<C, PCS>(
     point: &PCS::Point,
     eval_groups: &[&[C::Scalar]],
     transcript: &mut impl TranscriptWrite<C, C::Scalar>,
-) -> Result<HyraxBatchProof<C::Scalar, PCS>, Error>
+) -> Result<PCS::BatchProof, Error>
 where
     C: CurveAffine,
     PCS: PolynomialCommitmentScheme<
@@ -48,6 +39,8 @@ where
         ProverParam = HyraxProverParam<C>,
         Polynomial = Arc<MultilinearPolynomial<C::Scalar>>,
         Point = Vec<C::Scalar>,
+        Proof = MultilinearHyraxProof<C>,
+        BatchProof = MultilinearHyraxProof<C>,
     >,
 {
     let open_timer = start_timer(|| "multi open single point".to_string());
@@ -84,17 +77,15 @@ where
 
     end_timer(open_timer);
 
-    Ok(HyraxBatchProof {
-        eval_groups: eval_groups.iter().map(|g| g.to_vec()).collect(),
-        proof,
-    })
+    Ok(proof)
 }
 
 pub(crate) fn batch_verify_single_point_internal<C, PCS>(
     verifier_param: &PCS::VerifierParam,
     f_i_commitments: &[&PCS::Commitment],
     point: &PCS::Point,
-    batch_proof: &HyraxBatchProof<C::Scalar, PCS>,
+    eval_groups: &[&[C::Scalar]],
+    batch_proof: &PCS::BatchProof,
     transcript: &mut impl TranscriptWrite<C, C::Scalar>,
 ) -> Result<bool, Error>
 where
@@ -105,6 +96,8 @@ where
         VerifierParam = HyraxVerifierParam<C>,
         Polynomial = Arc<MultilinearPolynomial<C::Scalar>>,
         Point = Vec<C::Scalar>,
+        Proof = MultilinearHyraxProof<C>,
+        BatchProof = MultilinearHyraxProof<C>,
         Commitment = Vec<C>,
     >,
 {
@@ -116,7 +109,7 @@ where
     let point_high = transcript.squeeze_challenges(verifier_param.max_num_vars - point.len());
     let rlc_coeff = MultilinearPolynomial::eq_xy(&point_high).into_evals();
     let mut expected_eval = C::Scalar::zero();
-    for group in batch_proof.eval_groups.iter() {
+    for group in eval_groups.iter() {
         expected_eval = expected_eval * eta;
         for (eval, coeff) in group.iter().zip(rlc_coeff.iter()) {
             expected_eval = expected_eval + *eval * *coeff;
@@ -146,7 +139,7 @@ where
         &combined_comm,
         &new_point,
         &expected_eval,
-        &batch_proof.proof,
+        &batch_proof,
         transcript,
     )?;
 
@@ -162,10 +155,8 @@ mod tests {
     use super::*;
     use crate::backend::{
         pcs::{multilinear_hyrax::nizk::DotProductProofGens, prelude::MultilinearHyraxPCS},
-        util::{
-            test::std_rng,
-            transcript::Keccak256Transcript,
-        }, poly::multilinear::arc_mpoly,
+        poly::multilinear::arc_mpoly,
+        util::{test::std_rng, transcript::Keccak256Transcript},
     };
 
     fn test_multi_open_helper(
@@ -196,10 +187,14 @@ mod tests {
         // good path
         let commitment_slice = commitments.iter().collect_vec();
         let mut transcript = Keccak256Transcript::<Vec<u8>>::default();
-        assert!(batch_verify_single_point_internal(
+        assert!(batch_verify_single_point_internal::<
+            C,
+            MultilinearHyraxPCS<C>,
+        >(
             &ml_vk,
             commitment_slice.as_slice(),
             point,
+            evals,
             &batch_proof,
             &mut transcript
         )?);
@@ -207,13 +202,17 @@ mod tests {
         // bad path
         let mut wrong_evals = evals.iter().map(|eval| eval.to_vec()).collect_vec();
         wrong_evals[0][0] = wrong_evals[0][0] + F::one();
-        batch_proof.eval_groups = wrong_evals;
+        let wrong_evals_slices = wrong_evals.iter().map(|eval| eval.as_slice()).collect_vec();
 
         let mut transcript = Keccak256Transcript::<Vec<u8>>::default();
-        assert!(!batch_verify_single_point_internal(
+        assert!(!batch_verify_single_point_internal::<
+            C,
+            MultilinearHyraxPCS<C>,
+        >(
             &ml_vk,
             commitment_slice.as_slice(),
             point,
+            &wrong_evals_slices,
             &batch_proof,
             &mut transcript
         )?);
@@ -230,11 +229,12 @@ mod tests {
             arc_mpoly!(F, 2, 8, 3, 5, 4, 7, 9, 10),
             arc_mpoly!(F, 1, 2, 2, 3, 7, 9, 1, 9),
         ];
-        let poly_group2 = vec![
-            arc_mpoly!(F, 1, 4, 1, 5, 5, 7, 3, 10),
-        ];
+        let poly_group2 = vec![arc_mpoly!(F, 1, 4, 1, 5, 5, 7, 3, 10)];
 
-        let evals = vec![vec![F::from(12078u64), F::from(31649u64)], vec![F::from(22138u64)]];
+        let evals = vec![
+            vec![F::from(12078u64), F::from(31649u64)],
+            vec![F::from(22138u64)],
+        ];
         let eval_slices = evals.iter().map(|e| e.as_slice()).collect::<Vec<_>>();
         let point = vec![F::from(11u64), F::from(17u64), F::from(31u64)];
         test_multi_open_helper(&srs, &[&poly_group1, &poly_group2], &point, &eval_slices)?;

@@ -25,6 +25,7 @@ use super::{
     util::{expression::Expression, transcript::TranscriptWrite},
     PlonkishBackend, PlonkishCircuit, PlonkishCircuitInfo,
 };
+use itertools::max;
 
 mod lookup_check;
 mod perm_check;
@@ -51,6 +52,7 @@ where
     constraint_sum_check_msgs: Vec<Vec<F>>,
     intermediate_evals: Vec<F>,
     opening_sum_check_msgs: Vec<Vec<F>>,
+    final_evals: Vec<F>,
     batch_proof: Pcs::BatchProof,
 }
 
@@ -71,6 +73,7 @@ where
     preprocess_polys: Vec<Arc<MultilinearPolynomial<F>>>,
     permutation_polys: Vec<(usize, Arc<MultilinearPolynomial<F>>)>,
     opening_expression: Expression<F>,
+    segment_groups: Vec<Vec<(usize, usize)>>,
 }
 
 #[derive(Clone, Debug)]
@@ -79,15 +82,16 @@ where
     F: PrimeField,
     Pcs: PolynomialCommitmentScheme<F>,
 {
-    pcs: Pcs::VerifierParam,
-    num_instances: Vec<usize>,
-    num_witness_polys: Vec<usize>,
-    num_challenges: Vec<usize>,
-    num_vars: usize,
-    num_preprocess: usize,
-    constraint_expression: Expression<F>,
-    prep_perm_comm: Pcs::Commitment,
-    open_expression: Expression<F>,
+    pub pcs: Pcs::VerifierParam,
+    pub num_instances: Vec<usize>,
+    pub num_witness_polys: Vec<usize>,
+    pub num_challenges: Vec<usize>,
+    pub num_vars: usize,
+    pub num_preprocess: usize,
+    pub constraint_expression: Expression<F>,
+    pub prep_perm_comm: Pcs::Commitment,
+    pub open_expression: Expression<F>,
+    segment_groups: Vec<Vec<(usize, usize)>>,
 }
 
 impl<F, C, Pcs> PlonkishBackend<F, Pcs> for HyperPlonk<Pcs>
@@ -100,7 +104,6 @@ where
         Polynomial = Arc<MultilinearPolynomial<F>>,
         Point = Vec<F>,
         Commitment = Vec<C>,
-        BatchProof = HyraxBatchProof<F, Pcs>,
     >,
 {
     type ProverParam = HyperPlonkProverParam<F, Pcs>;
@@ -123,11 +126,11 @@ where
         let (pcs_pp, pcs_vp) = {
             let batches = vec![
                 circuit_info.preprocess_polys.len() + permutation_polys.len(),
-                circuit_info.num_witness_polys.iter().max().unwrap().clone(),
+                max(circuit_info.num_witness_polys.iter()).unwrap().clone(),
                 circuit_info.lookups.len(),
                 circuit_info.lookups.len() + circuit_info.num_permutation_chunks() * 2,
             ];
-            let max_num_batches = batches.iter().max().unwrap().clone();
+            let max_num_batches = max(batches.iter()).unwrap().clone();
 
             Pcs::trim(param, None, Some(num_vars), max_num_batches)?
         };
@@ -139,6 +142,48 @@ where
                 .cloned()
                 .collect_vec();
             Pcs::multi_commit(&pcs_pp, polys.as_slice())?
+        };
+
+        let segment_groups = {
+            let mut offset = circuit_info.witness_offset();
+            let mut witness_offsets = Vec::new();
+            for num_witness_poly in circuit_info.num_witness_polys.iter() {
+                witness_offsets.push(vec![(offset, *num_witness_poly)]);
+                offset += *num_witness_poly;
+            }
+            let mut res = vec![vec![
+                (
+                    circuit_info.preprocess_offset(),
+                    circuit_info.preprocess_polys.len(),
+                ),
+                (
+                    circuit_info.permutation_offset(),
+                    circuit_info.num_permutation_polys,
+                ),
+                (
+                    circuit_info.permutation_offset(),
+                    circuit_info.num_permutation_polys,
+                ),
+            ]];
+            res.extend(witness_offsets);
+            res.extend(vec![
+                vec![(
+                    circuit_info.lookup_count_offset(),
+                    circuit_info.lookups.len(),
+                )],
+                vec![
+                    (circuit_info.lookup_h_offset(), circuit_info.lookups.len()),
+                    (
+                        circuit_info.permutation_frac_offset(),
+                        circuit_info.num_permutation_chunks(),
+                    ),
+                    (
+                        circuit_info.permutation_prod_offset(),
+                        circuit_info.num_permutation_chunks(),
+                    ),
+                ],
+            ]);
+            res
         };
 
         // Compose `VirtualPolynomialInfo`
@@ -153,6 +198,7 @@ where
             constraint_expression: constraint_expression.clone(),
             open_expression: open_expression.clone(),
             prep_perm_comm: prep_perm_comm.clone(),
+            segment_groups: segment_groups.clone(),
         };
         let pp = HyperPlonkProverParam {
             pcs: pcs_pp,
@@ -170,6 +216,7 @@ where
                 .into_iter()
                 .zip(permutation_polys)
                 .collect(),
+            segment_groups,
         };
         Ok((pp, vp))
     }
@@ -286,24 +333,15 @@ where
         // Compute all offsets to help reorder the polynomials to be consistent with the
         // commitments
         let preprocess_offset = instances_polys.len();
-        let witness_offset = preprocess_offset + pp.preprocess_polys.len();
         let mut polys = polys;
-        let (
-            permutation_offset,
-            lookup_count_offset,
-            lookup_h_offset,
-            permutation_frac_offset,
-            permutation_prod_offset,
-            p1_p2_offset,
-        ) = extend_polys_and_compute_offsets(
-            &mut polys,
-            &permutation_polys,
-            &lookup_count_polys,
-            &lookup_h_polys,
-            &permutation_frac_polys,
-            &permutation_prod_polys,
-            &p1_p2_polys,
-        );
+        polys.extend(permutation_polys);
+        polys.extend(lookup_count_polys);
+        polys.extend(lookup_h_polys);
+        polys.extend(permutation_frac_polys);
+        polys.extend(permutation_prod_polys);
+
+        let p1_p2_offset = polys.len();
+        polys.extend(p1_p2_polys);
 
         challenges.extend([beta, gamma, alpha]);
 
@@ -332,7 +370,7 @@ where
             .iter()
             .fold(F::zero(), |acc, e| acc * eta + e);
 
-        let (opening_sum_check_msgs, points, evals) = prove_sum_check(
+        let (opening_sum_check_msgs, points, final_evals) = prove_sum_check(
             pp.num_instances.len(),
             &pp.opening_expression,
             &polys[0..p1_p2_offset],
@@ -342,39 +380,14 @@ where
             transcript,
         )?;
         end_timer(timer);
-        transcript.write_field_elements(&evals[preprocess_offset..])?;
+        transcript.write_field_elements(&final_evals[preprocess_offset..])?;
 
         // PCS open: reorder the polynomials and evaluations to match the order of the
         // commitments.
         let timer = start_timer(|| format!("pcs_batch_open"));
-        let segment_groups = {
-            let mut offset = witness_offset;
-            let mut witness_offsets = Vec::new();
-            for num_witness_poly in pp.num_witness_polys.iter() {
-                witness_offsets.push(vec![(offset, *num_witness_poly)]);
-                offset += *num_witness_poly;
-            }
-            let mut res = vec![vec![
-                (preprocess_offset, pp.preprocess_polys.len()),
-                (permutation_offset, permutation_polys.len()),
-            ]];
-            res.extend(witness_offsets);
-            res.extend(vec![
-                vec![(lookup_count_offset, lookup_count_polys.len())],
-                vec![
-                    (lookup_h_offset, lookup_h_polys.len()),
-                    (permutation_frac_offset, permutation_frac_polys.len()),
-                    (permutation_prod_offset, permutation_prod_polys.len()),
-                ],
-            ]);
-            res
-        };
 
-        // println!("poly_groups: {:?}", polys.iter().map(|g|
-        // g.evaluate(&points[0])).enumerate().collect_vec());
-        // println!("eval_groups: {:?}", evals.iter().enumerate().collect_vec());
-        let poly_groups = reorder_into_groups(polys, &segment_groups);
-        let eval_groups = reorder_into_groups(evals, &segment_groups);
+        let poly_groups = reorder_into_groups(polys, &pp.segment_groups);
+        let eval_groups = reorder_into_groups(final_evals.clone(), &pp.segment_groups);
 
         let poly_group_slices = poly_groups
             .iter()
@@ -401,6 +414,7 @@ where
             constraint_sum_check_msgs,
             intermediate_evals,
             opening_sum_check_msgs,
+            final_evals,
             batch_proof,
         })
     }
@@ -464,28 +478,6 @@ where
         let eta = transcript.squeeze_challenge();
         challenges.push(eta);
 
-        let evals = {
-            let mut evals = [
-                // empty instance evals
-                vec![F::zero(); instances.len()],
-                // preprocess polys
-                proof.batch_proof.eval_groups[0][0..vp.num_preprocess].to_vec(),
-            ]
-            .concat();
-
-            // witness polys
-            for i in 0..vp.num_witness_polys.len() {
-                evals.extend(proof.batch_proof.eval_groups[1 + i].clone())
-            }
-
-            // permutation polys
-            evals.extend(proof.batch_proof.eval_groups[0][vp.num_preprocess..].to_vec());
-            // lookup count polys
-            evals.extend(proof.batch_proof.eval_groups[1 + vp.num_witness_polys.len()].clone());
-            // lookup h polys, permutation frac polys, permutation prod polys
-            evals.extend(proof.batch_proof.eval_groups[2 + vp.num_witness_polys.len()].clone());
-            evals
-        };
         let msg_slices = proof
             .opening_sum_check_msgs
             .iter()
@@ -502,10 +494,15 @@ where
             &challenges,
             points[0].as_slice(),
             random_combined_eval,
-            evals.as_slice(),
+            &proof.final_evals,
             transcript,
         )?;
-        transcript.write_field_elements(&evals[instances.len()..])?;
+        transcript.write_field_elements(&proof.final_evals[instances.len()..])?;
+        let eval_groups = reorder_into_groups(proof.final_evals.clone(), &vp.segment_groups);
+        let eval_group_slices = eval_groups
+            .iter()
+            .map(|evals| evals.as_slice())
+            .collect_vec();
 
         // PCS verify
         let comms = iter::empty()
@@ -514,7 +511,14 @@ where
             .chain(iter::once(&proof.lookup_count_comm))
             .chain(iter::once(&proof.lookup_perm_intermediate_comm))
             .collect_vec();
-        Pcs::batch_verify(&vp.pcs, &comms, &points, &proof.batch_proof, transcript)?;
+        Pcs::batch_verify(
+            &vp.pcs,
+            &comms,
+            &points,
+            &eval_group_slices,
+            &proof.batch_proof,
+            transcript,
+        )?;
 
         Ok(())
     }
@@ -523,7 +527,7 @@ where
 #[cfg(test)]
 pub(crate) mod test {
     use crate::backend::{
-        pcs::prelude::{HyraxBatchProof, MultilinearHyraxPCS},
+        pcs::prelude::MultilinearHyraxPCS,
         piop::{
             util::{rand_plonk_circuit, rand_plonk_with_lookup_circuit},
             HyperPlonk, PolynomialCommitmentScheme,
@@ -558,7 +562,6 @@ pub(crate) mod test {
             Polynomial = Arc<MultilinearPolynomial<F>>,
             Point = Vec<F>,
             Commitment = Vec<C>,
-            BatchProof = HyraxBatchProof<F, Pcs>,
         >,
         T: TranscriptRead<C, F>
             + TranscriptWrite<C, F>

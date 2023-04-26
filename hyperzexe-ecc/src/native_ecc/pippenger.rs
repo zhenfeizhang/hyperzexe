@@ -45,7 +45,7 @@ where
 pub fn multi_exp<'v, BF: PrimeField, C, SFC>(
     ctx: &mut Context<'_, BF>,
     points: &[EcPoint<BF>],
-    scalars: &[SFC::FieldPoint],
+    scalars: &[SFC::FieldPoint], //! native
     max_scalar_bits_per_cell: usize,
     radix: usize,
     clump_factor: usize,

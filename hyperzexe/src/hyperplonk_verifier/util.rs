@@ -1,6 +1,2 @@
-mod poly;
-mod protocol;
-mod transcript;
-mod arithmetic;
-
-pub(crate) use itertools::Itertools;
+pub(crate) mod poly;
+pub(crate) mod protocol;

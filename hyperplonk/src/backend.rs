@@ -74,7 +74,7 @@ pub struct PlonkishCircuitInfo<F> {
     /// Maximum degree of constraints
     pub max_degree: Option<usize>,
     /// Number of permutation polynomials, -1 means unknown.
-    num_permutation_polys: usize,
+    pub num_permutation_polys: usize,
     /// Number of permutation chunks, -1 means unknown.
     permutation_chunk_size: usize,
     /// Whether permutation info is initialized.
@@ -219,11 +219,11 @@ impl<F: Clone> PlonkishCircuitInfo<F> {
         self.permutation_prod_offset() + self.num_permutation_chunks()
     }
 
-    fn num_permutation_chunks(&self) -> usize {
+    pub fn num_permutation_chunks(&self) -> usize {
         div_ceil(self.num_permutation_polys, self.permutation_chunk_size)
     }
 
-    fn permutation_chunk_size(&self) -> usize {
+    pub fn permutation_chunk_size(&self) -> usize {
         self.permutation_chunk_size
     }
 }

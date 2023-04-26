@@ -1,118 +1,48 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, ops::Mul};
 
 use halo2_proofs::curves::CurveAffine;
 
-use crate::{hyperplonk_verifier::{Protocol, pcs::OpenScheme}, halo2_verifier::util::transcript::TranscriptRead};
-
 use super::HyperPlonkVerifier;
+use crate::{
+    halo2_verifier::{loader::Loader, util::transcript::TranscriptRead},
+    hyperplonk_verifier::{
+        pcs::{MultiOpenScheme, OpenScheme},
+        sumcheck::{SumcheckRoundVerifier, SumcheckVerifier},
+        Error, Protocol,
+    },
+};
 
-pub struct HyperPlonk<PCS, SC>(PhantomData<(PCS, SC)>);
+pub struct HyperPlonk<C, L, SRC, SC, OS, MOS>(PhantomData<(C, L, SRC, SC, OS, MOS)>);
 
-impl<C, L, PCS, SC> HyperPlonkVerifier<C, L, PCS, SC> for HyperPlonk<PCS, SC>
+impl<C, L, SRC, SC, OS, MOS> HyperPlonkVerifier<C, L, SRC, SC, OS, MOS>
+    for HyperPlonk<C, L, SRC, SC, OS, MOS>
 where
     C: CurveAffine,
     L: Loader<C>,
-    PCS: OpenScheme<C, L>,
-    SC:
+    SRC: SumcheckRoundVerifier<C, L>,
+    SC: SumcheckVerifier<C, L, SRC>,
+    OS: OpenScheme<C, L>,
+    MOS: MultiOpenScheme<C, L, OS>,
 {
-    type Proof = HyperPlonkProof<C, L, PCS, SC>;
+    type VerifyingKey = HyperPlonkVerifyingKey<C, L, OS, MOS>;
+    type Proof = HyperPlonkProof<C, L, SRC, SC, OS, MOS>;
+    type Output = ();
 
     fn read_proof<T>(
-        vk: &PCS::VerifyingKey,
+        vk: &Self::VerifyingKey,
         protocol: &Protocol<C, L>,
         instances: &[Vec<L::LoadedScalar>],
         transcript: &mut T,
-    ) -> Self::Proof
+    ) -> Result<Self::Proof, Error>
     where
         T: TranscriptRead<C, L>,
     {
-        HyperPlonkProof::read_proof::<T>(vk, protocol, instances, transcript)
-    }
-
-    fn verify(
-        vk: &PCS::VerifyingKey,
-        protocol: &Protocol<C, L>,
-        instances: &[Vec<<L>::LoadedScalar>],
-        proof: &Self::Proof,
-    ) -> () {
-        let loader = proof.eta.loader();
-        let constraint_sum_check_msgs = proof.constraint_sum_check_msgs.iter().map(|x| x.as_slice()).collect::<Vec<_>>();
-        SC::verify(
-            protocol.num_vars,
-            protocol.constraint_expression,
-            instances,
-            &constraint_sum_check_msgs,
-            &proof.challenges,
-            &proof.y,
-            loader.load_zero(),
-            &proof.intermediate_evals,
-            &proof.x,
-        );
-        let intermediate_evals = proof.intermediate_evals[protocol.num_instance.len()..];
-        let powers_of_eta = proof.eta.powers(intermediate_evals.len());
-        let random_combined_eval = loader.sum_products(&powers_of_eta.iter().zip(intermediate_evals.iter().rev()).collect_vec());
-        let opening_sum_check_msgs = proof.opening_sum_check_msgs.iter().map(|x| x.as_slice()).collect::<Vec<_>>();
-        let final_evals = proof.pcs....
-        SC::verify(
-            protocol.num_vars,
-            protocol.opening_expression,
-            instances,
-            &opening_sum_check_msgs,
-            &proof.challenges,
-            &proof.x,
-            random_combined_eval,
-            &final_evals,
-            &proof.z,
-        );
-        PCS::verify(vk, &proof.pcs);
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct HyperPlonkProof<C, L, PCS>
-where
-    C: CurveAffine,
-    L: Loader<C>,
-{
-    pub witnesses: Vec<L::LoadedEcPoint>,
-    pub challenges: Vec<L::LoadedScalar>,
-    pub lookup_count: L::LoadedScalar,
-    pub lookup_perm_intermediate: L::LoadedEcPoint,
-    pub beta: L::LoadedScalar,
-    pub gamma: L::LoadedScalar,
-    pub alpha: L::LoadedScalar,
-    pub y: Vec<L::LoadedScalar>,
-    pub constraint_sum_check_msgs: Vec<Vec<L::LoadedScalar>>,
-    pub x: Vec<L::LoadedScalar>,
-    pub intermediate_evals: Vec<L::LoadedScalar>,
-    pub eta: L::LoadedScalar,
-    pub opening_sum_check_msgs: Vec<Vec<L::LoadedScalar>>,
-    pub z: L::LoadedScalar,
-    pub pcs: PCS::BatchProof,
-}
-
-impl<C, L, PCS> HyperPlonkProof<C, L, PCS>
-where
-    PCS: OpenScheme<C, L>,
-    C: CurveAffine,
-    L: Loader<C>,
-{
-    pub fn read_proof<T>(
-        svk: &PCS::VerifyingKey,
-        protocol: &Protocol<C, L>,
-        instances: &[Vec<L::LoadedScalar>],
-        transcript: &mut T,
-    ) -> Self
-    where
-        T: TranscriptRead<C, L>,
-    {
-        if let Some(transcript_initial_state) = &protocol.transcript_initial_state {
-            transcript.common_scalar(transcript_initial_state).unwrap();
-        }
-
         debug_assert_eq!(
             protocol.num_instance,
-            instances.iter().map(|instances| instances.len()).collect_vec(),
+            instances
+                .iter()
+                .map(|instances| instances.len())
+                .collect_vec(),
             "Invalid Instances"
         );
 
@@ -128,7 +58,12 @@ where
                 .iter()
                 .zip(protocol.num_challenge.iter())
                 .map(|(&n, &m)| {
-                    (transcript.read_n_ec_points(compute_comm_len(n)).unwrap(), transcript.squeeze_n_challenges(m))
+                    let total_len = n << protocol.num_vars;
+                    let commitment_len = MOS::compute_comm_len(vk, total_len);
+                    (
+                        transcript.read_n_ec_points(commitment_len).unwrap(),
+                        transcript.squeeze_n_challenges(m),
+                    )
                 })
                 .unzip();
 
@@ -149,261 +84,123 @@ where
         let alpha = transcript.squeeze_challenge();
         let y = transcript.squeeze_challenge();
 
-        let (constraint_sum_check_msgs, x) = SC::read(transcript);
+        let constraint_degree = protocol.constraint_expression.degree();
+        let constraint_sum_check_proof =
+            SC::read_proof(protocol.num_vars, constraint_degree, transcript)?;
 
-        // let constraint_sum_check_msgs = Vec::new();
-
-        // let mut x = Vec::with_capacity(protocol.num_vars);
-        // for i in 0..protocol.num_vars {
-        //     constraint_sum_check_msgs.push(transcript.read_n_scalars(protocol.constraint_expression.degree())?);
-        //     x.push(transcript.squeeze_challenge());
-        // }
-
-        let intermediate_evals = transcript.read_n_scalars(protocol.num_vars.num_intermediate_evals)?;
+        let intermediate_evals = transcript.read_n_scalars(protocol.num_all_polys)?;
         let eta = transcript.squeeze_challenge();
 
-        let (opening_sum_check_msgs, z) = SC::read(transcript);
-        // let mut z = Vec::with_capacity(protocol.num_vars);
-        // let mut opening_sum_check_msgs = Vec::with_capacity(protocol.num_vars);
-        // for i in 0..protocol.num_vars {
-        //     opening_sum_check_msgs.push(transcript.read_n_scalars(protocol.opening_expression.degree())?);
-        //     z.push(transcript.squeeze_challenge());
-        // }
+        let opening_degree = protocol.opening_expression.degree();
+        let opening_sum_check_proof =
+            SC::read_proof(protocol.num_vars, opening_degree, transcript)?;
 
-        let evals = Vec::new();
-        evals.extend(vec![loader.load_zero(); protocol.num_instance]);
+        let final_evals = transcript.read_n_scalars(protocol.num_all_polys)?;
 
-        let segment_groups = {
-            let mut offset = witness_offset;
-            let mut witness_offsets = Vec::new();
-            for num_witness_poly in pp.num_witness_polys.iter() {
-                witness_offsets.push(vec![(offset, *num_witness_poly)]);
-                offset += *num_witness_poly;
-            }
-            let mut res = vec![
-                vec![
-                    (preprocess_offset, pp.preprocess_polys.len()),
-                    (permutation_offset, permutation_polys.len()),
-                ]];
-            res.extend(witness_offsets);
-            res.extend(vec![
-                vec![(lookup_count_offset, lookup_count_polys.len())],
-                vec![
-                    (lookup_h_offset, lookup_h_polys.len()),
-                    (permutation_frac_offset, permutation_frac_polys.len()),
-                    (permutation_prod_offset, permutation_prod_polys.len()),
-                ],
-            ]);
-            res
-        };
+        let eval_groups = reorder_into_groups(evals, &protocol.segment_groups);
+        let pcs = MOS::read_proof(vk, protocol, &eval_groups, transcript)?;
 
-        let eval_groups = reorder_into_groups(evals, &segment_groups);
-        let pcs = PCS::read(svk, protocol, transcript, &eval_groups)?;
-
-        Ok(Self {
-            witnesses,
+        Ok(Self::Proof {
+            witness_comms: witnesses,
             challenges,
-            lookup_count,
-            lookup_perm_intermediate,
             beta,
+            lookup_count_comm: lookup_count,
             gamma,
+            lookup_perm_intermediate_comm: lookup_perm_intermediate,
             alpha,
             y,
-            constraint_sum_check_msgs,
-            x,
+            constraint_sum_check_proof,
             intermediate_evals,
             eta,
-            opening_sum_check_msgs,
-            z,
+            opening_sum_check_proof,
+            final_evals,
             pcs,
         })
     }
 
-    pub fn empty_queries(protocol: &Protocol<C, L>) -> Vec<pcs::Query<C::Scalar>> {
-        protocol
-            .queries
-            .iter()
-            .map(|query| pcs::Query {
-                poly: query.poly,
-                shift: protocol.domain.rotate_scalar(C::Scalar::ONE, query.rotation),
-                eval: (),
-            })
-            .collect()
-    }
-
-    fn queries(
-        &self,
+    fn verify(
+        vk: &Self::VerifyingKey,
         protocol: &Protocol<C, L>,
-        mut evaluations: FxHashMap<Query, L::LoadedScalar>,
-    ) -> Vec<pcs::Query<C::Scalar, L::LoadedScalar>> {
-        Self::empty_queries(protocol)
-            .into_iter()
-            .zip(protocol.queries.iter().map(|query| evaluations.remove(query).unwrap()))
-            .map(|(query, eval)| query.with_evaluation(eval))
-            .collect()
-    }
-
-    fn commitments<'a>(
-        &'a self,
-        protocol: &'a Protocol<C, L>,
-        common_poly_eval: &CommonPolynomialEvaluation<C, L>,
-        evaluations: &mut FxHashMap<Query, L::LoadedScalar>,
-    ) -> Vec<Msm<C, L>> {
-        let loader = common_poly_eval.zn().loader();
-        let mut commitments = iter::empty()
-            .chain(protocol.preprocessed.iter().map(Msm::base))
-            .chain(
-                self.committed_instances
-                    .as_ref()
-                    .map(|committed_instances| {
-                        committed_instances.iter().map(Msm::base).collect_vec()
-                    })
-                    .unwrap_or_else(|| {
-                        iter::repeat_with(Default::default)
-                            .take(protocol.num_instance.len())
-                            .collect_vec()
-                    }),
-            )
-            .chain(self.witnesses.iter().map(Msm::base))
+        instances: &[Vec<<L>::LoadedScalar>],
+        proof: &Self::Proof,
+    ) -> Result<Self::Output, Error> {
+        let loader = proof.eta.loader();
+        let constraint_degree = protocol.constraint_expression.degree();
+        let x = SC::verify(
+            &proof.constraint_sum_check_proof,
+            &protocol.constraint_expression,
+            &proof.intermediate_evals,
+            &proof.challenges,
+            &[&proof.y],
+            loader.load_zero(),
+            protocol.num_vars,
+            constraint_degree,
+        )?;
+        let intermediate_evals = proof.intermediate_evals[protocol.num_instance.len()..];
+        let powers_of_eta = proof.eta.powers(intermediate_evals.len());
+        let random_combined_eval = loader.sum_products(
+            &powers_of_eta
+                .iter()
+                .zip(intermediate_evals.iter().rev())
+                .collect_vec(),
+        );
+        let opening_degree = protocol.opening_expression.degree();
+        let z = SC::verify(
+            &proof.opening_sum_check_proof,
+            &protocol.opening_expression,
+            &proof.final_evals,
+            &proof.challenges,
+            &[x],
+            &random_combined_eval,
+            &protocol.num_vars,
+            opening_degree,
+        )?;
+        let comms = iter::empty()
+            .chain(iter::once(&vk.prep_perm_comm))
+            .chain(&proof.witness_comms)
+            .chain(iter::once(&proof.lookup_count_comm))
+            .chain(iter::once(&proof.lookup_perm_intermediate_comm))
             .collect_vec();
-
-        let numerator = protocol.quotient.numerator.evaluate(
-            &|scalar| Msm::constant(loader.load_const(&scalar)),
-            &|poly| Msm::constant(common_poly_eval.get(poly).clone()),
-            &|query| {
-                evaluations
-                    .get(&query)
-                    .cloned()
-                    .map(Msm::constant)
-                    .or_else(|| {
-                        (query.rotation == Rotation::cur())
-                            .then(|| commitments.get(query.poly).cloned())
-                            .flatten()
-                    })
-                    .ok_or(Error::InvalidQuery(query))
-                    .unwrap()
-            },
-            &|index| {
-                self.challenges
-                    .get(index)
-                    .cloned()
-                    .map(Msm::constant)
-                    .ok_or(Error::InvalidChallenge(index))
-                    .unwrap()
-            },
-            &|a| -a,
-            &|a, b| a + b,
-            &|a, b| match (a.size(), b.size()) {
-                (0, _) => b * &a.try_into_constant().unwrap(),
-                (_, 0) => a * &b.try_into_constant().unwrap(),
-                (_, _) => panic!("{:?}", Error::InvalidLinearization),
-            },
-            &|a, scalar| a * &loader.load_const(&scalar),
-        );
-
-        let quotient_query = Query::new(
-            protocol.preprocessed.len() + protocol.num_instance.len() + self.witnesses.len(),
-            Rotation::cur(),
-        );
-        let quotient = common_poly_eval
-            .zn()
-            .pow_const(protocol.quotient.chunk_degree as u64)
-            .powers(self.quotients.len())
-            .into_iter()
-            .zip(self.quotients.iter().map(Msm::base))
-            .map(|(coeff, chunk)| chunk * &coeff)
-            .sum::<Msm<_, _>>();
-        match protocol.linearization {
-            Some(LinearizationStrategy::WithoutConstant) => {
-                let linearization_query = Query::new(quotient_query.poly + 1, Rotation::cur());
-                let (msm, constant) = numerator.split();
-                commitments.push(quotient);
-                commitments.push(msm);
-                evaluations.insert(
-                    quotient_query,
-                    (constant.unwrap_or_else(|| loader.load_zero())
-                        + evaluations.get(&linearization_query).unwrap())
-                        * common_poly_eval.zn_minus_one_inv(),
-                );
-            }
-            Some(LinearizationStrategy::MinusVanishingTimesQuotient) => {
-                let (msm, constant) =
-                    (numerator - quotient * common_poly_eval.zn_minus_one()).split();
-                commitments.push(msm);
-                evaluations.insert(quotient_query, constant.unwrap_or_else(|| loader.load_zero()));
-            }
-            None => {
-                commitments.push(quotient);
-                evaluations.insert(
-                    quotient_query,
-                    numerator.try_into_constant().ok_or(Error::InvalidLinearization).unwrap()
-                        * common_poly_eval.zn_minus_one_inv(),
-                );
-            }
-        }
-
-        commitments
-    }
-
-    fn evaluations(
-        &self,
-        protocol: &Protocol<C, L>,
-        instances: &[Vec<L::LoadedScalar>],
-        common_poly_eval: &CommonPolynomialEvaluation<C, L>,
-    ) -> FxHashMap<Query, L::LoadedScalar> {
-        let loader = common_poly_eval.zn().loader();
-        let instance_evals = protocol.instance_committing_key.is_none().then(|| {
-            let offset = protocol.preprocessed.len();
-            let queries = {
-                let range = offset..offset + protocol.num_instance.len();
-                protocol
-                    .quotient
-                    .numerator
-                    .used_query()
-                    .into_iter()
-                    .filter(move |query| range.contains(&query.poly))
-            };
-            queries
-                .map(move |query| {
-                    let instances = instances[query.poly - offset].iter();
-                    let l_i_minus_r = (-query.rotation.0..)
-                        .map(|i_minus_r| common_poly_eval.get(Lagrange(i_minus_r)));
-                    let eval = loader.sum_products(&instances.zip(l_i_minus_r).collect_vec());
-                    (query, eval)
-                })
-                .collect_vec()
-        });
-
-        iter::empty()
-            .chain(instance_evals.into_iter().flatten())
-            .chain(protocol.evaluations.iter().cloned().zip(self.evaluations.iter().cloned()))
-            .collect()
+        MOS::verify(vk, &comms, &z, &proof.pcs)?;
+        Ok(())
     }
 }
 
-impl<C, MOS> CostEstimation<(C, MOS)> for Plonk<MOS>
+#[derive(Clone, Debug)]
+pub struct HyperPlonkVerifyingKey<
+    C: CurveAffine,
+    L: Loader<C>,
+    OS: OpenScheme<C, L>,
+    MOS: MultiOpenScheme<C, L, OS>,
+> {
+    pub prep_perm_comm: L::LoadedEcPoint,
+    pub pcs_vk: MOS::VerifyingKey,
+}
+
+#[derive(Clone, Debug)]
+pub struct HyperPlonkProof<C, L, SRC, SC, OS, MOS>
 where
     C: CurveAffine,
-    MOS: MultiOpenScheme<C, NativeLoader> + CostEstimation<C, Input = Vec<pcs::Query<C::Scalar>>>,
+    L: Loader<C>,
+    SRC: SumcheckRoundVerifier<C, L>,
+    SC: SumcheckVerifier<C, L, SRC>,
+    OS: OpenScheme<C, L>,
+    MOS: MultiOpenScheme<C, L, OS>,
 {
-    type Input = Protocol<C>;
-
-    fn estimate_cost(protocol: &Protocol<C>) -> Cost {
-        let plonk_cost = {
-            let num_accumulator = protocol.accumulator_indices.len();
-            let num_instance = protocol.num_instance.iter().sum();
-            let num_commitment =
-                protocol.num_witness.iter().sum::<usize>() + protocol.quotient.num_chunk();
-            let num_evaluation = protocol.evaluations.len();
-            let num_msm = protocol.preprocessed.len() + num_commitment + 1 + 2 * num_accumulator;
-            Cost::new(num_instance, num_commitment, num_evaluation, num_msm)
-        };
-        let pcs_cost = {
-            let queries = PlonkProof::<C, NativeLoader, MOS>::empty_queries(protocol);
-            MOS::estimate_cost(&queries)
-        };
-        plonk_cost + pcs_cost
-    }
+    pub witness_comms: Vec<L::LoadedEcPoint>,
+    pub challenges: Vec<L::LoadedScalar>,
+    pub beta: L::LoadedScalar,
+    pub lookup_count_comm: L::LoadedScalar,
+    pub gamma: L::LoadedScalar,
+    pub lookup_perm_intermediate_comm: L::LoadedEcPoint,
+    pub alpha: L::LoadedScalar,
+    pub y: Vec<L::LoadedScalar>,
+    pub constraint_sum_check_proof: SC::Proof,
+    pub intermediate_evals: Vec<L::LoadedScalar>,
+    pub eta: L::LoadedScalar,
+    pub opening_sum_check_proof: SC::Proof,
+    pub final_evals: Vec<L::LoadedScalar>,
+    pub pcs: MOS::Proof,
 }
 
 fn langranges<C, L>(
@@ -444,4 +241,19 @@ where
         .used_langrange()
         .into_iter()
         .chain(instance_eval_lagrange.into_iter().flatten())
+}
+
+pub(super) fn reorder_into_groups<T: Clone>(
+    arr: Vec<T>,
+    segment_groups: &[Vec<(usize, usize)>], // offset and length
+) -> Vec<Vec<T>> {
+    let mut groups = vec![];
+    for segments in segment_groups {
+        let mut group = vec![];
+        for (offset, length) in segments {
+            group.extend(arr[*offset..*offset + *length].to_vec());
+        }
+        groups.push(group);
+    }
+    groups
 }

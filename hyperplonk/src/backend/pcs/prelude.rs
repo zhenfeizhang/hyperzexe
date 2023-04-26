@@ -7,8 +7,8 @@
 //! Prelude
 pub use crate::backend::pcs::{
     multilinear_hyrax::{
-        batching::HyraxBatchProof, HyraxProverParam, HyraxSRS, HyraxVerifierParam,
-        MultilinearHyraxPCS,
+        batching::HyraxBatchProof, nizk::DotProductProofGens, HyraxProverParam, HyraxSRS,
+        HyraxVerifierParam, MultilinearHyraxPCS,
     },
     PolynomialCommitmentScheme,
 };

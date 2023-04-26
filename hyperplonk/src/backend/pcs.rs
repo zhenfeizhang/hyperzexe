@@ -120,6 +120,7 @@ pub trait PolynomialCommitmentScheme<F: Field>: Clone + Debug {
         verifier_param: &Self::VerifierParam,
         commitments: &[&Self::Commitment],
         points: &[Self::Point],
+        values: &[&[F]],
         batch_proof: &Self::BatchProof,
         transcript: &mut impl TranscriptWrite<Self::Curve, F>,
     ) -> Result<bool, Error>;

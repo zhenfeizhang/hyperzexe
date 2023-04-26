@@ -1,32 +1,45 @@
-use ::hyperplonk::halo2_curves::pasta::pallas::Scalar;
 use halo2_proofs::curves::CurveAffine;
 use std::fmt::Debug;
 
-use crate::{halo2_verifier::util::transcript::TranscriptRead, hyperplonk_verifier::Protocol};
+use crate::{
+    halo2_verifier::{loader::Loader, util::transcript::TranscriptRead},
+    hyperplonk_verifier::Protocol,
+};
 
-use super::ScalarPoint;
+use super::{
+    pcs::{MultiOpenScheme, OpenScheme},
+    sumcheck::{sumcheck_round::SumcheckRoundVerifier, SumcheckVerifier},
+    Error,
+};
 
 mod hyperplonk;
 
-pub trait HyperPlonkVerifier<C, PCS>
+pub trait HyperPlonkVerifier<C, L, SRC, SC, OS, MOS>
 where
     C: CurveAffine,
+    L: Loader<C>,
+    SRC: SumcheckRoundVerifier<C, L>,
+    SC: SumcheckVerifier<C, L, SRC>,
+    OS: OpenScheme<C, L>,
+    MOS: MultiOpenScheme<C, L, OS>,
 {
+    type VerifyingKey: Clone + Debug;
     type Proof: Clone + Debug;
+    type Output: Clone + Debug;
 
-    fn read_proof<T, L>(
-        vk: &PCS::VerifyingKey,
-        protocol: &Protocol<C>,
-        instances: &[Vec<ScalarPoint<C>>],
+    fn read_proof<T>(
+        vk: &Self::VerifyingKey,
+        protocol: &Protocol<C, L>,
+        instances: &[Vec<L::LoadedScalar>],
         transcript: &mut T,
-    ) -> Self::Proof
+    ) -> Result<Self::Proof, Error>
     where
         T: TranscriptRead<C, L>;
 
     fn verify(
-        vk: &PCS::VerifyingKey,
-        protocol: &Protocol<C>,
-        instances: &[Vec<ScalarPoint<C>>],
+        vk: &Self::VerifyingKey,
+        protocol: &Protocol<C, L>,
+        instances: &[Vec<L::LoadedScalar>],
         proof: &Self::Proof,
-    ) -> PCS::Output;
+    ) -> Result<Self::Output, Error>;
 }
