@@ -9,8 +9,10 @@ pub use crate::pcs::{
     errors::PCSError,
     multilinear_hyrax::{
         batching::BatchProof,
-        dense_mlpoly::{PolyCommitmentBlinds, PolyCommitmentGens},
         MultilinearHyraxPCS,
+        HyraxSRS,
+        HyraxProverParam,
+        HyraxVerifierParam,
     },
     structs::HyraxCommitment,
     PolynomialCommitmentScheme,

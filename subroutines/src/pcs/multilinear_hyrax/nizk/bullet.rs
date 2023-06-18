@@ -6,12 +6,10 @@
 use crate::PCSError;
 
 use super::super::math::Math;
-use ark_ec::ProjectiveCurve;
-use ark_ec::{msm::VariableBaseMSM, AffineCurve};
+use ark_ec::{msm::VariableBaseMSM, AffineCurve, ProjectiveCurve};
 use ark_ff::{batch_inversion, Field, PrimeField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Read, SerializationError, Write};
-use ark_std::One;
-use ark_std::Zero;
+use ark_std::{One, Zero};
 use core::iter;
 use transcript::IOPTranscript;
 

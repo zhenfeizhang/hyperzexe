@@ -7,7 +7,7 @@ use hyperplonk::{
     prelude::{CustomizedGates, HyperPlonkErrors, MockCircuit},
     HyperPlonkSNARK,
 };
-use subroutines::{pcs::PolynomialCommitmentScheme, poly_iop::PolyIOP, MultilinearHyraxPCS, PolyCommitmentGens};
+use subroutines::{pcs::PolynomialCommitmentScheme, poly_iop::PolyIOP, MultilinearHyraxPCS, HyraxSRS};
 
 const SUPPORTED_SIZE: usize = 20;
 const MIN_NUM_VARS: usize = 8;
@@ -44,18 +44,18 @@ fn main() -> Result<(), HyperPlonkErrors> {
     Ok(())
 }
 
-fn read_srs() -> Result<PolyCommitmentGens<C>, io::Error> {
+fn read_srs() -> Result<HyraxSRS<C>, io::Error> {
     let mut f = File::open("srs.params")?;
-    Ok(PolyCommitmentGens::<C>::deserialize_unchecked(&mut f).unwrap())
+    Ok(HyraxSRS::<C>::deserialize_unchecked(&mut f).unwrap())
 }
 
-fn write_srs(pcs_srs: &PolyCommitmentGens<C>) {
+fn write_srs(pcs_srs: &HyraxSRS<C>) {
     let mut f = File::create("srs.params").unwrap();
     pcs_srs.serialize_uncompressed(&mut f).unwrap();
 }
 
 fn bench_vanilla_plonk(
-    pcs_srs: &PolyCommitmentGens<C>,
+    pcs_srs: &HyraxSRS<C>,
     thread: usize,
 ) -> Result<(), HyperPlonkErrors> {
     let filename = format!("vanilla threads {}.txt", thread);
@@ -69,7 +69,7 @@ fn bench_vanilla_plonk(
 }
 
 fn bench_jellyfish_plonk(
-    pcs_srs: &PolyCommitmentGens<C>,
+    pcs_srs: &HyraxSRS<C>,
     thread: usize,
 ) -> Result<(), HyperPlonkErrors> {
     let filename = format!("jellyfish threads {}.txt", thread);
@@ -83,7 +83,7 @@ fn bench_jellyfish_plonk(
 }
 
 fn bench_high_degree_plonk(
-    pcs_srs: &PolyCommitmentGens<C>,
+    pcs_srs: &HyraxSRS<C>,
     degree: usize,
     thread: usize,
 ) -> Result<(), HyperPlonkErrors> {
@@ -100,7 +100,7 @@ fn bench_mock_circuit_zkp_helper(
     file: &mut File,
     nv: usize,
     gate: &CustomizedGates,
-    pcs_srs: &PolyCommitmentGens<C>,
+    pcs_srs: &HyraxSRS<C>,
 ) -> Result<(), HyperPlonkErrors> {
     let repetition = if nv < 10 {
         5
