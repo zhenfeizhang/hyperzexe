@@ -143,7 +143,7 @@ mod test {
     use ark_bls12_381::{G1Affine as G1, Fr};
     use subroutines::{
         pcs::{
-            prelude::{MultilinearHyraxPCS, PolyCommitmentGens},
+            prelude::{MultilinearHyraxPCS, HyraxSRS},
             PolynomialCommitmentScheme,
         },
         poly_iop::PolyIOP,
@@ -178,7 +178,7 @@ mod test {
     fn test_mock_circuit_zkp_helper(
         nv: usize,
         gate: &CustomizedGates,
-        pcs_srs: &PolyCommitmentGens<G1>,
+        pcs_srs: &HyraxSRS<G1>,
     ) -> Result<(), HyperPlonkErrors> {
         let circuit = MockCircuit::<Fr>::new(1 << nv, gate);
         assert!(circuit.is_satisfied());

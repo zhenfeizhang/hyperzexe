@@ -72,14 +72,18 @@ where
         &self,
         prover_param: impl Borrow<PCS::ProverParam>,
         transcript: &mut IOPTranscript<C::ScalarField>,
-    ) -> Result<PCS::BatchProof, HyperPlonkErrors> {
-        Ok(PCS::multi_open(
-            prover_param.borrow(),
-            self.polynomials.as_ref(),
-            self.points.as_ref(),
-            self.evals.as_ref(),
-            transcript,
-        )?)
+    ) -> Result<Vec<PCS::BatchProof>, HyperPlonkErrors> {
+        let mut batch_openings = Vec::new();
+        for ((poly, point), eval) in self.polynomials.iter().zip(self.points.iter()).zip(self.evals.iter()) {
+            batch_openings.push(PCS::multi_open(
+                prover_param.borrow(),
+                &[&[poly.clone()]],
+                &[point.clone()],
+                &[&[eval.clone()]],
+                transcript,
+            )?);
+        }
+        Ok(batch_openings)
     }
 }
 

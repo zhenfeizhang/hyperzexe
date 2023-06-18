@@ -7,6 +7,7 @@ use super::{
     random::RandomTape,
 };
 
+
 use crate::{pcs::multilinear_hyrax::HyraxCommitment, PCSError};
 
 use arithmetic::fix_last_variables;
@@ -20,20 +21,40 @@ use ark_std::Zero;
 
 #[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PolyCommitmentGens<C: AffineCurve> {
+    pub max_num_vars: usize,
+    pub right_num_vars: usize,
     pub gens: DotProductProofGens<C>,
 }
 
 impl<C: AffineCurve> PolyCommitmentGens<C> {
-    // the number of variables in the multilinear polynomial
-    pub fn new(num_vars: usize, label: &'static [u8]) -> Result<PolyCommitmentGens<C>, PCSError> {
-        let (_left, right) = EqPolynomial::<C::ScalarField>::compute_factored_lens(num_vars);
-        let gens = DotProductProofGens::new(right.pow2(), label)?;
-        Ok(PolyCommitmentGens { gens })
+    // Create from the number of variables in the multilinear polynomial
+    pub fn new(
+        max_num_vars: usize,
+        label: &'static [u8],
+    ) -> Result<PolyCommitmentGens<C>, PCSError> {
+        let right_num_vars = max_num_vars + 1 >> 1;
+        let gens = DotProductProofGens::new(right_num_vars.pow2(), label)?;
+        Ok(PolyCommitmentGens {
+            max_num_vars,
+            right_num_vars,
+            gens,
+        })
     }
-    pub fn trim(&self, new_num_vars: usize) -> Result<Self, PCSError> {
-        let (_left, right) = EqPolynomial::<C::ScalarField>::compute_factored_lens(new_num_vars);
-        let new_gens = self.gens.trim(right.pow2())?;
-        Ok(PolyCommitmentGens { gens: new_gens })
+    // Create from existing SRS.
+    pub fn new_from_srs(
+        srs: &DotProductProofGens<C>,
+        max_num_vars: usize,
+    ) -> Result<PolyCommitmentGens<C>, PCSError> {
+        let right_num_vars = max_num_vars + 1 >> 1;
+        let gens = srs.trim(1 << right_num_vars)?;
+        Ok(PolyCommitmentGens {
+            max_num_vars,
+            right_num_vars,
+            gens,
+        })
+    }
+    pub fn compute_factored_lens(&self, num_vars: usize) -> (usize, usize) {
+        (num_vars - self.right_num_vars, self.right_num_vars)
     }
 }
 
@@ -68,14 +89,8 @@ impl<F: Field> EqPolynomial<F> {
         evals
     }
 
-    /// compute_factored_lens output the number of variables for (high, low)
-    pub fn compute_factored_lens(ell: usize) -> (usize, usize) {
-        (ell / 2, ell - ell / 2)
-    }
-
-    pub fn compute_factored_evals(&self) -> (Vec<F>, Vec<F>) {
+    pub fn compute_factored_evals(&self, right_num_vars: usize) -> (Vec<F>, Vec<F>) {
         let ell = self.r.len();
-        let (_left_num_vars, right_num_vars) = EqPolynomial::<F>::compute_factored_lens(ell);
 
         let L = EqPolynomial::new(self.r[right_num_vars..ell].to_vec()).evals();
         let R = EqPolynomial::new(self.r[..right_num_vars].to_vec()).evals();
@@ -110,8 +125,7 @@ impl<C: AffineCurve> MultilinearHyraxProof<C> {
         // assert vectors are of the right size
         assert_eq!(poly.num_vars, r.len());
 
-        let (left_num_vars, right_num_vars) =
-            EqPolynomial::<C::ScalarField>::compute_factored_lens(r.len());
+        let (left_num_vars, right_num_vars) = gens.compute_factored_lens(r.len());
         let L_size = left_num_vars.pow2();
         let R_size = right_num_vars.pow2();
 
@@ -127,7 +141,7 @@ impl<C: AffineCurve> MultilinearHyraxProof<C> {
 
         // compute the L and R vectors
         let eq = EqPolynomial::new(r.to_vec());
-        let (L, R) = eq.compute_factored_evals();
+        let (L, R) = eq.compute_factored_evals(right_num_vars);
         assert_eq!(L.len(), L_size);
         assert_eq!(R.len(), R_size);
 
@@ -167,7 +181,8 @@ impl<C: AffineCurve> MultilinearHyraxProof<C> {
 
         // compute L and R
         let eq = EqPolynomial::new(r.to_vec());
-        let (L, R) = eq.compute_factored_evals();
+        let (_, right_num_vars) = gens.compute_factored_lens(r.len());
+        let (L, R) = eq.compute_factored_evals(right_num_vars);
 
         // compute a weighted sum of commitments and L
         let L = L
@@ -195,7 +210,8 @@ mod tests {
 
     fn evaluate_with_LR(Z: &[Scalar], r: &[Scalar]) -> Scalar {
         let eq = EqPolynomial::new(r.to_vec());
-        let (L, R) = eq.compute_factored_evals();
+        let right_num_vars = (r.len() + 1) / 2;
+        let (L, R) = eq.compute_factored_evals(right_num_vars);
 
         let ell = r.len();
         // ensure ell is even
@@ -332,7 +348,8 @@ mod tests {
             r.push(Scalar::rand(&mut csprng));
         }
         let chis = EqPolynomial::new(r.clone()).evals();
-        let (L, R) = EqPolynomial::new(r).compute_factored_evals();
+        let right_num_vars = (r.len() + 1) / 2;
+        let (L, R) = EqPolynomial::new(r).compute_factored_evals(right_num_vars);
         let O = compute_outerproduct(L, R);
         assert_eq!(chis, O);
     }
@@ -353,7 +370,8 @@ mod tests {
             r_rev
         };
         let eq = EqPolynomial::new(r_rev);
-        let (L2, R2) = eq.compute_factored_evals();
+        let right_num_vars = (r.len() + 1) / 2;
+        let (L2, R2) = eq.compute_factored_evals(right_num_vars);
         assert_eq!(L, L2);
         assert_eq!(R, R2);
     }

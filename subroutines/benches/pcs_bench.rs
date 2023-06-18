@@ -26,7 +26,7 @@ fn bench_pcs() -> Result<(), PCSError> {
         };
 
         let poly = Arc::new(DenseMultilinearExtension::rand(nv, &mut rng));
-        let (ck, vk) = (uni_params.clone(), uni_params.clone());
+        let (ck, vk) = MultilinearHyraxPCS::<G1>::trim(&uni_params, None, Some(nv))?;
 
         let point: Vec<_> = (0..nv).map(|_| Fr::rand(&mut rng)).collect();
 

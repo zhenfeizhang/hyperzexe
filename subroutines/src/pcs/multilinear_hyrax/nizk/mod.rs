@@ -1,10 +1,11 @@
 #![allow(clippy::too_many_arguments)]
 
 use super::{commitments::MultiCommitGens, math::Math, random::RandomTape};
-use crate::pcs::multilinear_hyrax::commit_array;
-use crate::{pcs::multilinear_hyrax::commit_element, PCSError};
-use ark_ec::AffineCurve;
-use ark_ec::ProjectiveCurve;
+use crate::{
+    pcs::multilinear_hyrax::{commit_array, commit_element},
+    PCSError,
+};
+use ark_ec::{AffineCurve, ProjectiveCurve};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Read, SerializationError, Write};
 use ark_std::Zero;
 use transcript::IOPTranscript;
@@ -196,8 +197,7 @@ impl<C: AffineCurve> DotProductProofLog<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bls12_381::Fr;
-    use ark_bls12_381::G1Affine;
+    use ark_bls12_381::{Fr, G1Affine};
     use ark_ff::UniformRand;
     use ark_std::test_rng;
 
