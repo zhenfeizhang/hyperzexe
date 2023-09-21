@@ -2,24 +2,99 @@ use arithmetic::{identity_permutation_mles, VPAuxInfo, VirtualPolynomial};
 use ark_bls12_381::{G1Affine as G1, Fr};
 use ark_poly::{DenseMultilinearExtension, MultilinearExtension};
 use ark_std::test_rng;
+use rand_chacha::rand_core::RngCore;
 use std::{marker::PhantomData, sync::Arc, time::Instant};
 use subroutines::{
     pcs::{prelude::MultilinearHyraxPCS, PolynomialCommitmentScheme},
     poly_iop::prelude::{
-        PermutationCheck, PolyIOP, PolyIOPErrors, ProductCheck, SumCheck, ZeroCheck,
+        PermutationCheck, PolyIOP, PolyIOPErrors, ProductCheck, SumCheck, ZeroCheck, LookupCheck,
     },
 };
 
 type Hyrax = MultilinearHyraxPCS<G1>;
 
 fn main() -> Result<(), PolyIOPErrors> {
-    bench_permutation_check()?;
-    println!("\n\n");
-    bench_sum_check()?;
-    println!("\n\n");
-    bench_prod_check()?;
-    println!("\n\n");
-    bench_zero_check()
+    bench_lookup_check()
+    // println!("\n\n");
+    // bench_permutation_check()?;
+    // println!("\n\n");
+    // bench_sum_check()?;
+    // println!("\n\n");
+    // bench_prod_check()?;
+    // println!("\n\n");
+    // bench_zero_check()
+}
+
+
+fn bench_lookup_check() -> Result<(), PolyIOPErrors> {
+    let mut rng = test_rng();
+
+    for nv in 4..20 {
+        let srs = Hyrax::gen_srs_for_testing(&mut rng, nv + 1)?;
+        let (pcs_param, _) = Hyrax::trim(&srs, None, Some(nv + 1))?;
+
+        let repetition = if nv < 10 {
+            100
+        } else if nv < 20 {
+            50
+        } else {
+            10
+        };
+
+        let ws = Arc::new(DenseMultilinearExtension::rand(nv, &mut rng));
+        let fsx = vec![Arc::new(DenseMultilinearExtension::from_evaluations_vec(nv,
+            (0..(1<<nv)).map(|_| ws.evaluations[(rng.next_u32() % (1 << nv)) as usize]).collect::<Vec<_>>(),
+        ))];
+
+        let proof =
+            {
+                let start = Instant::now();
+                let mut transcript =
+                    <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::init_transcript();
+                transcript.append_message(b"testing", b"initializing transcript for testing")?;
+
+                let (proof, _q_x, _frac_poly) = <PolyIOP<Fr> as LookupCheck<
+                    G1,
+                    Hyrax,
+                >>::prove(
+                    &pcs_param, &fsx, &ws, &mut transcript
+                )?;
+
+                println!(
+                    "Lookup check proving time for {} variables: {} ns",
+                    nv,
+                    start.elapsed().as_nanos() / repetition as u128
+                );
+                proof
+            };
+
+        {
+            let poly_info = VPAuxInfo {
+                max_degree: 3,
+                num_variables: nv,
+                phantom: PhantomData::default(),
+            };
+
+            let start = Instant::now();
+            let mut transcript =
+                <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::init_transcript();
+            transcript.append_message(b"testing", b"initializing transcript for testing")?;
+            let _perm_check_sum_claim = <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::verify(
+                &proof,
+                &poly_info,
+                &mut transcript,
+            )?;
+            println!(
+                "Lookup check verification time for {} variables: {} ns",
+                nv,
+                start.elapsed().as_nanos() / repetition as u128
+            );
+        }
+
+        println!("====================================");
+    }
+
+    Ok(())
 }
 
 fn bench_sum_check() -> Result<(), PolyIOPErrors> {
