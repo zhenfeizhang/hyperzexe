@@ -25,11 +25,11 @@ fn main() -> Result<(), PolyIOPErrors> {
     // bench_zero_check()
 }
 
-
+#[allow(unused)]
 fn bench_lookup_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
 
-    for nv in 4..20 {
+    for nv in 4..=22 {
         let srs = Hyrax::gen_srs_for_testing(&mut rng, nv + 1)?;
         let (pcs_param, _) = Hyrax::trim(&srs, None, Some(nv + 1))?;
 
@@ -49,23 +49,27 @@ fn bench_lookup_check() -> Result<(), PolyIOPErrors> {
         let proof =
             {
                 let start = Instant::now();
-                let mut transcript =
-                    <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::init_transcript();
-                transcript.append_message(b"testing", b"initializing transcript for testing")?;
-
-                let (proof, _q_x, _frac_poly) = <PolyIOP<Fr> as LookupCheck<
-                    G1,
-                    Hyrax,
-                >>::prove(
-                    &pcs_param, &fsx, &ws, &mut transcript
-                )?;
+                
+                let mut lookup_proof = None;
+                for _ in 0..repetition {
+                    let mut transcript =
+                        <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::init_transcript();
+                    transcript.append_message(b"testing", b"initializing transcript for testing")?;
+                    let (proof, _q_x, _frac_poly) = <PolyIOP<Fr> as LookupCheck<
+                        G1,
+                        Hyrax,
+                    >>::prove(
+                        &pcs_param, &fsx, &ws, &mut transcript
+                    )?;
+                    lookup_proof = Some(proof);
+                }
 
                 println!(
                     "Lookup check proving time for {} variables: {} ns",
                     nv,
                     start.elapsed().as_nanos() / repetition as u128
                 );
-                proof
+                lookup_proof.unwrap()
             };
 
         {
@@ -76,14 +80,16 @@ fn bench_lookup_check() -> Result<(), PolyIOPErrors> {
             };
 
             let start = Instant::now();
-            let mut transcript =
-                <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::init_transcript();
-            transcript.append_message(b"testing", b"initializing transcript for testing")?;
-            let _perm_check_sum_claim = <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::verify(
-                &proof,
-                &poly_info,
-                &mut transcript,
-            )?;
+            for _ in 0..repetition {
+                let mut transcript =
+                    <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::init_transcript();
+                transcript.append_message(b"testing", b"initializing transcript for testing")?;
+                let _perm_check_sum_claim = <PolyIOP<Fr> as LookupCheck<G1, Hyrax>>::verify(
+                    &proof,
+                    &poly_info,
+                    &mut transcript,
+                )?;
+            }
             println!(
                 "Lookup check verification time for {} variables: {} ns",
                 nv,
@@ -97,6 +103,7 @@ fn bench_lookup_check() -> Result<(), PolyIOPErrors> {
     Ok(())
 }
 
+#[allow(unused)]
 fn bench_sum_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
     for degree in 2..4 {
@@ -155,6 +162,7 @@ fn bench_sum_check() -> Result<(), PolyIOPErrors> {
     Ok(())
 }
 
+#[allow(unused)]
 fn bench_zero_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
     for degree in 2..4 {
@@ -204,6 +212,7 @@ fn bench_zero_check() -> Result<(), PolyIOPErrors> {
     Ok(())
 }
 
+#[allow(unused)]
 fn bench_permutation_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
 
@@ -275,6 +284,7 @@ fn bench_permutation_check() -> Result<(), PolyIOPErrors> {
     Ok(())
 }
 
+#[allow(unused)]
 fn bench_prod_check() -> Result<(), PolyIOPErrors> {
     let mut rng = test_rng();
 
